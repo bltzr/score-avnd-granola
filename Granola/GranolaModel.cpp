@@ -27,7 +27,7 @@ void Granola::operator()(halp::tick t)
         {
           // If we're before the end of the file copy the sample
           if(start + j < inputs.sound.frames())
-            out[j] = in[start + j];
+            out[j] = inputs.gain * in[start + j];
           else
             out[j] = 0;
         }
