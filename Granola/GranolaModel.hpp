@@ -4,23 +4,25 @@
 #include <halp/controls.hpp>
 #include <halp/meta.hpp>
 
+#include <cmath>
+
 namespace Granola
 {
 
 class Granola
 {
 public:
-  halp_meta(name, "My Avendish Gain")
+  halp_meta(name, "Granola")
   halp_meta(category, "Audio")
-  halp_meta(c_name, "my_gain")
+  halp_meta(c_name, "granola")
   halp_meta(uuid, "38F9684D-54A6-4F48-91E4-3B251F0956EA")
 
-  // Define inputs and outputs ports.
   // See the docs at https://github.com/celtera/avendish
   struct ins
   {
-    halp::dynamic_audio_bus<"Input", double> audio;
-    halp::knob_f32<"Weight", halp::range{.min = 0., .max = 10., .init = 0.5}> gain;
+    halp::soundfile_port<"Sound"> sound;
+    halp::hslider_f32<"Position", halp::range{0., 1., 0.}> pos;
+    halp::knob_f32<"Gain", halp::range{.min = 0., .max = 10., .init = 0.5}> gain;
   } inputs;
 
   struct

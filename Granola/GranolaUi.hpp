@@ -13,7 +13,9 @@ struct Granola::ui
   halp_meta(layout, vbox)
   halp_meta(background, dark)
 
-  halp::label title{"My First Processor"};
+  halp::label title{"Granulator"};
+  halp::item<&ins::sound> sound;
+  halp::item<&ins::pos> pos;
   halp::item<&ins::gain> gain;
 };
 }
