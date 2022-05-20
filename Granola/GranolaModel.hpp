@@ -6,6 +6,8 @@
 
 #include <cmath>
 
+#include "grain.hpp"
+
 namespace Granola
 {
 
@@ -21,6 +23,7 @@ public:
   struct ins
   {
     halp::soundfile_port<"Sound"> sound;
+    halp::soundfile_port<"Window"> win;
     halp::hslider_f32<"Position", halp::range{0., 1., 0.}> pos;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 10., .init = 0.5}> gain;
   } inputs;

@@ -12,6 +12,10 @@ add_library(
   Granola/GranolaModel.cpp
   Granola/GranolaUi.hpp
   Granola/Granola.hpp
+  Granola/grain.hpp
+  Granola/grain.cpp
+  Granola/utils.hpp
+  Granola/utils.cpp
 
   score_addon_granola.hpp
   score_addon_granola.cpp
