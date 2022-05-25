@@ -2,7 +2,7 @@
 
 namespace Granola
 {
-void Granola::operator()(halp::tick t)
+void Granola::operator()(tick t)
 {
   // Process the input buffer
   for (int i = 0; i < outputs.audio.channels; i++)

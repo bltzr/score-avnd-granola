@@ -15,8 +15,10 @@ struct Granola::ui
 
   halp::label title{"Granulator"};
   halp::item<&ins::sound> sound;
-  halp::item<&ins::sound> win;
+  //halp::item<&ins::sound> win; not supported yet
   halp::item<&ins::pos> pos;
   halp::item<&ins::gain> gain;
+  halp::item<&ins::interp> interp;
+  halp::item<&ins::loopmode> loopmode;
 };
 }

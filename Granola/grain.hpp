@@ -46,8 +46,9 @@ struct GranuGrain
              long buffer_index,
              std::vector<double> shape_coef, // if one number then look for window, if two do shaping?, or add another inlet for
              std::vector<double> amps,
-             const halp::soundfile_port<"Sound">  buf_proxy,
-             const halp::soundfile_port<"Window"> wind_proxy,
+             const halp::soundfile_port<"Sound">&  buf_proxy,
+             const halp::soundfile_port<"Window">& wind_proxy,
+             double sr,
              bool loopmode = false,
              long windowType = 2,
              long channel_offset = 0,
