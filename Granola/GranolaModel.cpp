@@ -7,8 +7,8 @@ void Granola::operator()(tick t)
   // Process the input buffer
   for (int i = 0; i < outputs.audio.channels; i++)
   {
-      if(!inputs.sound)
-            return;
+      if(!inputs.sound){
+            return;}
 
       // Just take the first channel of the soundfile.
       // in is a std::span

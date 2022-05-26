@@ -12,6 +12,8 @@
 namespace Granola
 {
 
+using tick = halp::tick;
+
 typedef  std::vector<GranuGrain>    GrainVec;
 
 class Granola
@@ -22,15 +24,16 @@ public:
   halp_meta(c_name, "granola")
   halp_meta(uuid, "38F9684D-54A6-4F48-91E4-3B251F0956EA")
 
-  // See the docs at https://github.com/celtera/avendish
   struct ins
   {
     halp::soundfile_port<"Sound", double> sound;
-    halp::soundfile_port<"Window", double> win; // not supported yet
+    //halp::soundfile_port<"Window", double> win; // not supported yet
     halp::hslider_f32<"Position", halp::range{0., 1., 0.}> pos;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 10., .init = 0.5}> gain;
-    halp__enum("Interpolation mode", Cubic, None, Linear, Cubic) interp;
+    struct { halp__enum_combobox("Interpolation mode", Cubic, None, Linear, Cubic) } interp_type;
     halp::toggle<"Loop"> loopmode;
+    halp::spinbox_i32<"Source Channels", halp::range{0, 32, 1}> src_channels;
+    halp::spinbox_i32<"Channel Offset", halp::range{0, 32, 1}> channel_offset;
 
   } inputs;
 
@@ -46,28 +49,20 @@ public:
     sampleinterval = 1.0 / samplerate;
     ms2samps = samplerate * 0.001;
 
-    for( long i = 0; i < grains.size(); i++)
-            grains[i].reset();
+    clear();
+
   }
 
-  // Do our processing for N samples
-  using tick = halp::tick;
+  void clear() { for( long i = 0; i < grains.size(); i++) grains[i].reset();}
 
-  // Defined in the .cpp
   void operator()(tick t);
 
-  // UI is defined in another file to keep things clear.
   struct ui;
 
   GrainVec    grains;
 
-  long        numbufs;
   bool        buf_soft_lock; // useful?
 
-  long        src_channels;
-  long        channel_offset;
-
-  long        interp_type;
 
   long        busy;
 
@@ -79,8 +74,6 @@ public:
   long        numoutputs;
 
   long        num_voices;
-
-  long        loopmode;
 
   // t_critical  lock; // is there an equivalent?
 

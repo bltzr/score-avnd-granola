@@ -33,8 +33,8 @@ void GranuGrain::set(double start,
          long buffer_index,
          std::vector<double> shape_coef,
          std::vector<double> amps,
-         const halp::soundfile_port<"Sound">  buf_proxy,
-         const halp::soundfile_port<"Window"> wind_proxy,
+         const halp::soundfile_port<"Sound">&  buf_proxy,
+         const halp::soundfile_port<"Window">& wind_proxy,
          double sr,
          bool loopmode,
          long windowType,
@@ -152,47 +152,15 @@ void GranuGrain::set(double start,
     
     m_active = true;
 
-    
-    
 }
-/*
-double betaMode(double a, double b)
-{
-        t_pt mode;
-        if(a > 1 && b > 1){
-            mode.x = (a - 1) / (a + b - 2);
-            mode.y = gsl_ran_beta_pdf(mode.x, a, b);
-        }else if(a == 1 && b == 1){
-            mode.x = .5;
-            mode.y = 1.;
-        }else{
-            double left, right;
-            left = gsl_ran_beta_pdf(.0001, a, b);
-            right = gsl_ran_beta_pdf(.9999, a, b);
-            if(right >= left){
-                mode.x = .0001;
-                mode.y = right;
-            }else{
-                mode.x = .9999;
-                mode.y = left;
-            }
-        }
-}
-*/
+
 
 
 double GranuGrain::window(double phase)
 {
     switch (m_wind_type) {
         case 0:
-            /*
-             {
-             double v = betaNumerator(phase, m_shape_x, m_shape_y) * m_wind_norm_coef;
-             if( v > 1 || v < 0 )
-             printf("out of bounds %.17g (phase %.17g, 1 - incr %.17g incr %.17g counter %ld max %ld)\n", v, phase, 1-m_incr, m_incr, m_phase_counter, m_max_count );
-             
-             }
-             */
+
             return CLAMP(betaNumerator(phase, m_shape_x, m_shape_y) * m_wind_norm_coef, 0., 1.);
         case 1:
         {

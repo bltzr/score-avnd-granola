@@ -18,7 +18,9 @@ struct Granola::ui
   //halp::item<&ins::sound> win; not supported yet
   halp::item<&ins::pos> pos;
   halp::item<&ins::gain> gain;
-  halp::item<&ins::interp> interp;
+  //halp::item<&ins::interp_type> interp_type;
   halp::item<&ins::loopmode> loopmode;
+  halp::item<&ins::src_channels> src_channels;
+  halp::item<&ins::channel_offset> channel_offset;
 };
 }

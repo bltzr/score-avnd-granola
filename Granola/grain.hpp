@@ -50,7 +50,7 @@ struct GranuGrain
              const halp::soundfile_port<"Window">& wind_proxy,
              double sr,
              bool loopmode = false,
-             long windowType = 2,
+             long windowType = 0,
              long channel_offset = 0,
              long src_channels = 1);
     
