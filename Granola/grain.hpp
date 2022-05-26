@@ -50,13 +50,13 @@ struct GranuGrain
              const halp::soundfile_port<"Window">& wind_proxy,
              double sr,
              bool loopmode = false,
-             long windowType = 0,
+             long windowType = 2,
              long channel_offset = 0,
              long src_channels = 1);
     
     
-    std::vector<double> incr( float *bufferData, long interpType );
-    std::vector<double> incr_src_channels( float *bufferData, long interpType );
+    //std::vector<double> incr( float *bufferData, long interpType );
+    std::vector<double> incr(halp::soundfile_port<"Sound">& snd, long interpType );
 
     void reset();
     

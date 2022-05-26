@@ -182,102 +182,8 @@ typedef enum _granu_interp
     CUBIC
 } eGInterp;
 
-std::vector<double> GranuGrain::incr( float *bufferData, long interpType )
-{
-    size_t nchans = m_chan_amp.size();
-    
-    std::vector<double> amps;
-    amps.reserve(nchans);
-    // allocation, should probably avoid this, try to figure it out when the dsp resets, and init all the grain voices
-    
-    double _playSamp = 0;
-    double _sampIdx = 0;
-    
-    double phase = m_phase_counter == m_max_count ? 1. : m_phase_counter * m_incr;
-    
-    if( m_direction ) // true == backwards
-        _sampIdx = m_startpoint + ((1 - phase) * m_playlen);
-    else
-        _sampIdx = m_startpoint + (phase * m_playlen);
 
-    
-    if( m_loop_mode )
-        _sampIdx = wrapDouble(_sampIdx, m_buf_len);
-    
-    
-    
-    double lowerSamp, upperSamp, frac, a1, b, c, d, upperVal;
-    
-    switch (interpType)
-    {
-        case LINEAR:
-            lowerSamp = floor(_sampIdx);
-            upperSamp = ceil(_sampIdx);
-            if( m_loop_mode )
-                upperVal = bufferData[ m_buf_chans * (long)wrapDouble(upperSamp, m_buf_len) + m_channel_offset ];
-            else
-                upperVal = (upperSamp < m_buf_len) ? bufferData[ m_buf_chans * (long)upperSamp + m_channel_offset ] : 0.0;
-            
-            _playSamp = linear_interp( bufferData[ m_buf_chans * (long)lowerSamp + m_channel_offset ], upperVal, _sampIdx - lowerSamp);
-            break;
-            
-        case CUBIC:
-            lowerSamp = floor(_sampIdx);
-            frac = _sampIdx - lowerSamp;
-            
-            if( m_loop_mode ){
-                a1 = (long)lowerSamp - 1 < 0 ? 0 : bufferData[ m_buf_chans * (long)wrapDouble(lowerSamp - 1, m_buf_len) + m_channel_offset ];
-                b = bufferData[ m_buf_chans * (long)lowerSamp + m_channel_offset ];
-                c = bufferData[ m_buf_chans * (long)wrapDouble(lowerSamp + 1, m_buf_len) + m_channel_offset ];
-                d = bufferData[ m_buf_chans * (long)wrapDouble(lowerSamp + 2, m_buf_len) + m_channel_offset ];
-            }
-            else
-            {
-                a1 = (long)lowerSamp - 1 < 0 ? 0 : bufferData[ m_buf_chans * ((long)lowerSamp - 1) + m_channel_offset ];
-                b = bufferData[ m_buf_chans * (long)lowerSamp + m_channel_offset ];
-                c = (long)lowerSamp + 1 >= m_buf_len ? 0 : bufferData[ m_buf_chans * ((long)lowerSamp + 1) + m_channel_offset ];
-                d = (long)lowerSamp + 2 >= m_buf_len ? 0 : bufferData[ m_buf_chans * ((long)lowerSamp + 2) + m_channel_offset ];
-            }
-           
-            
-            _playSamp = cubicInterpolate(a1,b,c,d,frac);
-            break;
-            
-        case NONE:
-        default:
-            _playSamp = bufferData[ m_buf_chans * (long)_sampIdx + m_channel_offset ];
-            break;
-    }
-/*
-    // window
-    double px = fastPrecisePow(m_phase, exp(m_shape_x));
-    double ax = sin( PI * px);
-    double windX = fastPrecisePow( ax, exp(m_shape_y));
-*/
-    
-   
-    _playSamp *= window(phase);
-
-    for( long i = 0 ; i < nchans; i++ )
-    {
-        amps.emplace_back( _playSamp * m_chan_amp[i] );
-        // to do: pre-allocate everything when dsp is reset and don't use dynamic memory here
-    }
-    
-    //m_phase += m_incr;
-    m_phase_counter++;
-    
-    if(  m_phase_counter > m_max_count ) {
-     //   printf("released at phase %.17g prev %.17g incr %.17g\n", phase, phase-m_incr, m_incr );
-     //   printf("counter %ld maxcount %ld \n", m_phase_counter, m_max_count );
-        reset();
-    }
-    return amps;
-}
-
-
-
-std::vector<double> GranuGrain::incr_src_channels( float *bufferData, long interpType )
+std::vector<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, long interpType )
 {
     // output amps is the src_channels here
     size_t nchans = m_src_channels;
@@ -308,6 +214,9 @@ std::vector<double> GranuGrain::incr_src_channels( float *bufferData, long inter
 
     for( int i = 0; (i < nchans) && (i < m_buf_chans); i++)
     {
+        int chan = ( i + m_channel_offset < m_buf_chans) ? i + m_channel_offset : m_buf_chans - 1;
+        auto bufferData = snd.channel(chan);
+
         switch (interpType)
             {
                 case LINEAR:
@@ -316,11 +225,11 @@ std::vector<double> GranuGrain::incr_src_channels( float *bufferData, long inter
                     
                     
                     if( m_loop_mode )
-                        upperVal = bufferData[ i + m_buf_chans * (long)wrapDouble(upperSamp, m_buf_len) ];
+                        upperVal = bufferData[ (long)wrapDouble(upperSamp, m_buf_len) ];
                     else
-                        upperVal = (upperSamp < m_buf_len) ? bufferData[ i + m_buf_chans * (long)upperSamp ] : 0.0;
+                        upperVal = (upperSamp < m_buf_len) ? bufferData[ (long)upperSamp ] : 0.0;
                     
-                    _playSamp = linear_interp( bufferData[ i + m_buf_chans * (long)lowerSamp + m_channel_offset ], upperVal, _sampIdx - lowerSamp);
+                    _playSamp = linear_interp( bufferData[ (long)lowerSamp ], upperVal, _sampIdx - lowerSamp);
                     break;
                     
                 case CUBIC:
@@ -329,16 +238,16 @@ std::vector<double> GranuGrain::incr_src_channels( float *bufferData, long inter
                     
                     if( m_loop_mode ){
                         a1 = (long)lowerSamp - 1 < 0 ? 0 : bufferData[ i + m_buf_chans * (long)wrapDouble(lowerSamp - 1, m_buf_len)  ];
-                        b = bufferData[ i + m_buf_chans * (long)lowerSamp  ];
-                        c = bufferData[ i + m_buf_chans * (long)wrapDouble(lowerSamp + 1, m_buf_len) ];
-                        d = bufferData[ i + m_buf_chans * (long)wrapDouble(lowerSamp + 2, m_buf_len) ];
+                        b = bufferData[  (long)lowerSamp  ];
+                        c = bufferData[  (long)wrapDouble(lowerSamp + 1, m_buf_len) ];
+                        d = bufferData[  (long)wrapDouble(lowerSamp + 2, m_buf_len) ];
                     }
                     else
                     {
-                        a1 = (long)lowerSamp - 1 < 0 ? 0 : bufferData[ i + m_buf_chans * ((long)lowerSamp - 1)  ];
-                        b = bufferData[ i + m_buf_chans * (long)lowerSamp  ];
-                        c = ((long)lowerSamp + 1) >= m_buf_len ? 0 : bufferData[ i + m_buf_chans * ((long)lowerSamp + 1) ];
-                        d = ((long)lowerSamp + 2) >= m_buf_len ? 0 : bufferData[ i + m_buf_chans * ((long)lowerSamp + 2) ];
+                        a1 = (long)lowerSamp - 1 < 0 ? 0 : bufferData[ ((long)lowerSamp - 1)  ];
+                        b = bufferData[ (long)lowerSamp  ];
+                        c = ((long)lowerSamp + 1) >= m_buf_len ? 0 : bufferData[ ((long)lowerSamp + 1) ];
+                        d = ((long)lowerSamp + 2) >= m_buf_len ? 0 : bufferData[ ((long)lowerSamp + 2) ];
                     }
                    
                     
@@ -347,7 +256,7 @@ std::vector<double> GranuGrain::incr_src_channels( float *bufferData, long inter
                     
                 case NONE:
                 default:
-                    _playSamp = bufferData[ i + m_buf_chans * (long)_sampIdx  ];
+                    _playSamp = bufferData[ (long)_sampIdx  ];
                     break;
             }
         /*

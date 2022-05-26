@@ -15,10 +15,9 @@ void Granola::prepare(setup info)
 
 void Granola::operator()(tick t)
 {
-  if(!inputs.sound){
-        //qDebug() << "no sound";
+  if(!inputs.sound)
         return;
-  }
+
   // Process the input buffer
   for (int i = 0; i < outputs.audio.channels; i++)
   {
