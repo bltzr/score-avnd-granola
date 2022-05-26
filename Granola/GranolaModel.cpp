@@ -1,15 +1,27 @@
 #include "Granola.hpp"
+//#include <QDebug>
 
 namespace Granola
 {
+void Granola::prepare(setup info)
+{
+  samplerate = info.rate;
+  sampleinterval = 1.0 / samplerate;
+  ms2samps = samplerate * 0.001;
+
+  clear();
+
+}
+
 void Granola::operator()(tick t)
 {
+  if(!inputs.sound){
+        //qDebug() << "no sound";
+        return;
+  }
   // Process the input buffer
   for (int i = 0; i < outputs.audio.channels; i++)
   {
-      if(!inputs.sound){
-            return;}
-
       // Just take the first channel of the soundfile.
       // in is a std::span
       const auto in = inputs.sound.channel(0);
@@ -25,6 +37,7 @@ void Granola::operator()(tick t)
 
         for (int j = 0; j < t.frames; j++)
         {
+
           // If we're before the end of the file copy the sample
           if(start + j < inputs.sound.frames())
             out[j] = inputs.gain * in[start + j];
