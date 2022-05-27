@@ -66,7 +66,8 @@ void Granola::operator()(tick t)
   {
       ++trigger_counter;
       //qDebug() << trigger_counter;
-      trigger = trigger_counter >= inputs.sound.frames() * inputs.dur / inputs.density;
+      trigger = trigger_counter >= inputs.sound.frames() * inputs.dur /
+                (inputs.density * ((inputs.rate < 0) ? -inputs.rate : inputs.rate)) ;
       if (trigger) { trigger_counter = 0; qDebug() << " triggering grain";}
 
       alloccheck = false;
