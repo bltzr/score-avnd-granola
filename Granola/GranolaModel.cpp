@@ -108,7 +108,7 @@ void Granola::operator()(tick t)
                   }
 
                   grains[i].set(inputs.pos,
-                                inputs.dur * ms2samps,
+                                inputs.dur,
                                 inputs.rate,
                                 //_bufIdx,
                                 windcoef,
@@ -144,6 +144,8 @@ void Granola::operator()(tick t)
 
   // somehow dispaly the current number of active grains
   //out[numGrainOuts][k] = (double)busyCount;
+
+  qDebug() << "Busy count:" << busyCount;
 
   //}
 

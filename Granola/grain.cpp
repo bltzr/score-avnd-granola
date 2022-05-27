@@ -28,18 +28,18 @@ void GranuGrain::reset()
 }
 
 void GranuGrain::set(double start,
-         double dur_samps,
-         double rate,
-         //long buffer_index,
-         std::vector<double> shape_coef,
-         std::vector<double> amps,
-         const halp::soundfile_port<"Sound">&  buf_proxy,
-         //const halp::soundfile_port<"Window">& wind_proxy,
-         double sr,
-         bool loopmode,
-         long windowType,
-         long channel_offset,
-         long src_channels)
+                     double dur_samps,
+                     double rate,
+                     //long buffer_index,
+                     std::vector<double> shape_coef,
+                     std::vector<double> amps,
+                     const halp::soundfile_port<"Sound">&  buf_proxy,
+                     //const halp::soundfile_port<"Window">& wind_proxy,
+                     double sr,
+                     bool loopmode,
+                     long windowType,
+                     long channel_offset,
+                     long src_channels)
 {
     m_buf_len = buf_proxy.frames() - 1;
     m_buf_chans = buf_proxy.channels();
@@ -63,7 +63,7 @@ void GranuGrain::set(double start,
     // duration of grain
     // or if negative use the length of the original sample scaled by ratio
     
-    double gr_dur = (dur_samps <= 0) ? m_buf_len : dur_samps;
+    double gr_dur = (dur_samps <= 0 || dur_samps >= 1) ? m_buf_len : dur_samps * m_buf_len;
     
     // phase goes 0-1
     // if rate is negative, then play backwards
