@@ -24,15 +24,21 @@ public:
 
   struct ins
   {
-    halp::soundfile_port<"Sound"> sound;
+    halp::soundfile_port<"Sound"> {
+        void update(Granolette& self) {
+          // custom code goes here
+       }
+    } sound;
     //halp::soundfile_port<"Window", double> win; // not supported yet
     halp::hslider_f32<"Position", halp::range{0., 1., 0.}> pos;
     halp::hslider_f32<"Duration", halp::range{0., 1., 0.}> dur;
+    halp::knob_f32<"Rate", halp::range{-10., 10., 0.}> rate;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
     struct { halp__enum_combobox("Interpolation mode", Cubic, None, Linear, Cubic) } interp_type;
     halp::toggle<"Loop"> loopmode;
     halp::spinbox_i32<"Source Channels", halp::range{0, 32, 1}> src_channels;
     halp::spinbox_i32<"Channel Offset", halp::range{0, 32, 1}> channel_offset;
+    halp::spinbox_i32<"Max Voices", halp::range{0, 1024, 16}> num_voices;
 
   } inputs;
 
@@ -51,7 +57,6 @@ public:
   float       sampleinterval;
   double      ms2samps;
   long        numoutputs;
-  long        num_voices;
 
   // t_critical  lock; // is there an equivalent?
 
