@@ -39,8 +39,10 @@ public:
     halp::hslider_f32<"Position", halp::range{0., 1., 0.}> pos;
     halp::hslider_f32<"Duration", halp::range{0., 1., 0.}> dur;
     halp::knob_f32<"Rate", halp::range{-10., 10., 0.}> rate;
+    halp::knob_f32<"Density", halp::range{0., 10., 0.}> density;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
     struct { halp__enum_combobox("Interpolation mode", Cubic, None, Linear, Cubic) } interp_type;
+    struct { halp__enum_combobox("Window mode", Beta, Beta, Cos, Kuma) } window_mode;
     halp::toggle<"Loop"> loopmode;
     struct : halp::spinbox_i32<"Source Channels", halp::range{1, NCHAN, 1}> {
         void update(Granola& self) {
@@ -72,7 +74,10 @@ public:
 
   bool      buf_soft_lock{false}; // useful?
   bool      alloccheck{false};
+  bool      trigger{false};
+  long      trigger_counter{0};
   int       busyCount{0};
+  bool      useDefaultAmp{true};
   double    maxAmp{0};
   float     samplerate;
   float     sampleinterval;

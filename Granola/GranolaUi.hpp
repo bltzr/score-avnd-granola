@@ -18,6 +18,7 @@ struct Granola::ui
   //halp::item<&ins::sound> win; not supported yet
   halp::item<&ins::pos> pos;
   halp::item<&ins::dur> dur;
+  halp::item<&ins::density> density;
   halp::item<&ins::gain> gain;
   halp::item<&ins::rate> rate;
   //halp::item<&ins::interp_type> interp_type;

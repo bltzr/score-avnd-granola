@@ -30,11 +30,11 @@ void GranuGrain::reset()
 void GranuGrain::set(double start,
          double dur_samps,
          double rate,
-         long buffer_index,
+         //long buffer_index,
          std::vector<double> shape_coef,
          std::vector<double> amps,
          const halp::soundfile_port<"Sound">&  buf_proxy,
-         const halp::soundfile_port<"Window">& wind_proxy,
+         //const halp::soundfile_port<"Window">& wind_proxy,
          double sr,
          bool loopmode,
          long windowType,
@@ -44,8 +44,12 @@ void GranuGrain::set(double start,
     m_buf_len = buf_proxy.frames() - 1;
     m_buf_chans = buf_proxy.channels();
     m_buf_sr = sr;
-    m_buf_index = buffer_index;
+    //m_buf_index = buffer_index;
     m_src_channels = src_channels;
+
+    amp_init.reserve(m_src_channels);
+    for (int i = 0; i < m_src_channels; i++)
+        amp_init.emplace_back(0.);
     
    // m_src_channels = CLAMP(src_channels, 1, m_buf_chans);
     m_channel_offset = CLAMP(channel_offset, 0, m_buf_chans - 1);
@@ -183,13 +187,13 @@ typedef enum _granu_interp
 } eGInterp;
 
 
-std::vector<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, long interpType )
+std::span<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, long interpType )
 {
     // output amps is the src_channels here
     size_t nchans = m_src_channels;
     
-    std::vector<double> amps;
-    amps.reserve(nchans);
+    std::span<double> amps(amp_init);
+    //amps.reserve(nchans);
     // to do: pre-allocate everything when dsp is reset and don't use dynamic memory here
 
    // printf("incr_src_channels %ld\n", nchans);
@@ -269,7 +273,7 @@ std::vector<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, long in
            
             _playSamp *= window(phase);
      
-            amps.emplace_back( _playSamp * m_chan_amp[i] );
+            amps[i] = _playSamp * m_chan_amp[i] ;
         // to do: pre-allocate everything when dsp is reset and don't use dynamic memory here
 
     }
@@ -279,7 +283,7 @@ std::vector<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, long in
     {
         while( missingCh-- )
         {
-            amps.emplace_back( amps.back() );
+            amps[missingCh] = amps.back();
         }
     }
     

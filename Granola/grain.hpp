@@ -35,6 +35,8 @@ struct GranuGrain
     
     long        m_channel_offset = 0;
     long        m_src_channels = 1;
+
+    std::vector<double> amp_init;
     
     // src channel count
     //  0 = amps used as weights for 1 channel with offset option
@@ -43,11 +45,11 @@ struct GranuGrain
     void set(double start,
              double dur_samps,
              double rate,
-             long buffer_index,
+             //long buffer_index, // add this when we have several buffers
              std::vector<double> shape_coef, // if one number then look for window, if two do shaping?, or add another inlet for
              std::vector<double> amps,
              const halp::soundfile_port<"Sound">&  buf_proxy,
-             const halp::soundfile_port<"Window">& wind_proxy,
+             //const halp::soundfile_port<"Window">& wind_proxy, // future holder of optional window buffer
              double sr,
              bool loopmode = false,
              long windowType = 2,
@@ -56,7 +58,7 @@ struct GranuGrain
     
     
     //std::vector<double> incr( float *bufferData, long interpType );
-    std::vector<double> incr(halp::soundfile_port<"Sound">& snd, long interpType );
+    std::span<double> incr(halp::soundfile_port<"Sound">& snd, long interpType );
 
     void reset();
     
