@@ -68,7 +68,7 @@ void Granola::operator()(tick t)
       //qDebug() << trigger_counter;
       trigger = trigger_counter >= inputs.sound.frames() * inputs.dur /
                 (inputs.density * ((inputs.rate < 0) ? -inputs.rate : inputs.rate)) ;
-      if (trigger) { trigger_counter = 0; qDebug() << " triggering grain";}
+      if (trigger) { trigger_counter = 0; }//qDebug() << " triggering grain";}
 
       alloccheck = false;
       maxAmp = 1;
@@ -101,16 +101,15 @@ void Granola::operator()(tick t)
              inputs.dur != 0. &&
              inputs.rate != 0. ){
 
-              qDebug() << "grain triggered";
+              //qDebug() << "grain triggered";
               if( !grains[i].m_active )
               {
-                  for( int j = 0; j < 2; j++){
-                      windcoef[j] = 1.; // replace from actual coefs from an XY widget (with polar conversion
-                  }
+                  windcoef[0] = 1. + inputs.win_coefs.value.y*wc_radius*cos(inputs.win_coefs.value.x*PI/2.);
+                  windcoef[1] = 1. + inputs.win_coefs.value.y*wc_radius*sin(inputs.win_coefs.value.x*PI/2.);
 
                   grains[i].set(inputs.pos,
                                 inputs.dur,
-                                inputs.rate,
+                                inputs.rate * ((inputs.reverse) ? -1 : 1),
                                 //_bufIdx,
                                 windcoef,
                                 ampvec,
@@ -134,8 +133,8 @@ void Granola::operator()(tick t)
 
               for( int j = 0; j < n_channels; j++)
               {
-                  auto out = outputs.audio.channel(i, t.frames);
-                  out[k] += outSamps[j];
+                  auto out = outputs.audio.channel(j, t.frames);
+                  out[k] += outSamps[j] * inputs.gain;
               }
 
               busyCount++;
@@ -146,7 +145,7 @@ void Granola::operator()(tick t)
   // somehow dispaly the current number of active grains
   //out[numGrainOuts][k] = (double)busyCount;
 
-  qDebug() << "Busy count:" << busyCount;
+  //qDebug() << "Busy count:" << busyCount;
 
   //}
 

@@ -21,6 +21,8 @@ struct Granola::ui
   halp::item<&ins::density> density;
   halp::item<&ins::gain> gain;
   halp::item<&ins::rate> rate;
+  halp::item<&ins::reverse> reverse;
+  halp::item<&ins::win_coefs> win_coefs;
   //halp::item<&ins::interp_type> interp_type;
   //halp::item<&ins::loopmode> loopmode;
   //halp::item<&ins::src_channels> src_channels;

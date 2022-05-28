@@ -38,9 +38,11 @@ public:
     //halp::soundfile_port<"Window", double> win; // not supported yet
     halp::hslider_f32<"Position", halp::range{0., 1., 0.}> pos;
     halp::hslider_f32<"Duration", halp::range{0., 1., 0.}> dur;
-    halp::knob_f32<"Rate", halp::range{-10., 10., 0.}> rate;
-    halp::knob_f32<"Density", halp::range{0., 10., 0.}> density;
+    halp::knob_f32<"Rate", halp::range{0.000001, 10., 1.}> rate;
+    halp::toggle<"Reverse"> reverse;
+    halp::knob_f32<"Density", halp::range{0., 50., 0.}> density;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
+    halp::xy_pad_f32<"Window coefs", halp::range{0.f, 0.f, 0.f}> win_coefs;
     struct { halp__enum_combobox("Interpolation mode", Cubic, None, Linear, Cubic) } interp_type;
     struct { halp__enum_combobox("Window mode", Beta, Beta, Cos, Kuma) } window_mode;
     halp::toggle<"Loop"> loopmode;
@@ -54,7 +56,7 @@ public:
            value = CLAMP(value, 0, self.inputs.sound.channels()-self.inputs.src_channels-1);
         }
     } channel_offset;
-    struct : halp::spinbox_i32<"Max Voices", halp::range{0, 1024, 16}> {
+    struct : halp::spinbox_i32<"Max Voices", halp::range{0, 1024, 32}> {
        void update(Granola& self) {
           qDebug() << "num voices changed: " << value;//std::string{name()}.c_str();
           self.grains.resize(value);
@@ -94,6 +96,9 @@ public:
 
   using tick = halp::tick;
   void operator()(tick t);
+
+private:
+  float wc_radius{64.};
 
 };
 
