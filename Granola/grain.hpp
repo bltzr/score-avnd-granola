@@ -9,6 +9,7 @@
 #include <halp/controls.hpp>
 
 #include <boost/container/static_vector.hpp>
+#include <boost/dynamic_bitset.hpp>
 
 #define NCHAN 8
 struct GranuGrain
@@ -25,7 +26,11 @@ struct GranuGrain
     double      m_shape_y = 1.;
     double      m_wind_norm_coef = 1.0;
     
+    boost::container::static_vector<double, 2> m_shape;
     boost::container::static_vector<double, NCHAN> m_chan_amp;
+
+    boost::dynamic_bitset<> m_window_update;
+    std::vector<double> m_window;
 
     long        m_buf_chans = 1;
     double      m_buf_len = 0;
@@ -39,7 +44,7 @@ struct GranuGrain
     long        m_channel_offset = 0;
     long        m_src_channels = 1;
 
-    std::vector<double> amp_init;
+    boost::container::static_vector<double, NCHAN> amp_init;
     
     // src channel count
     //  0 = amps used as weights for 1 channel with offset option
@@ -65,7 +70,7 @@ struct GranuGrain
 
     void reset();
     
-    double window(double phase);
+    double window(long phase);
     
     
 private:
@@ -103,12 +108,12 @@ private:
 };
 
 
-inline double kumaraswamy(double x, double a, double b)
+static inline double kumaraswamy(double x, double a, double b)
 { // a and b >= 1
     return a * b * fastPrecisePow(x, a - 1.) * fastPrecisePow( 1. - fastPrecisePow(x, a), b - 1.);
 }
 
-inline double kumaraswamy_peak(double a, double b)
+static inline double kumaraswamy_peak(double a, double b)
 {
     if( (a <= 1) && (b <= 1) )
         return 1;
@@ -118,7 +123,7 @@ inline double kumaraswamy_peak(double a, double b)
 }
 
 
-inline double fixDenorm(double x)
+static inline double fixDenorm(double x)
 {
     return ((fabs(x) < 1e-20f) ? 0.0 : x);
 
@@ -126,7 +131,7 @@ inline double fixDenorm(double x)
 
 // phase input should be 0 < x < 1
 // currently I'm not seeing the full range of the curve for a,b < 1, so maybe the phase needs to be scaled somehow
-inline double betaNumerator(double x, double a, double b)
+static inline double betaNumerator(double x, double a, double b)
 {
     const double num = pow(x, a-1) * pow(1-x, b-1);
     
@@ -135,30 +140,30 @@ inline double betaNumerator(double x, double a, double b)
     return std::isinf(num) ? 1 : num;
 }
 
-inline double clampGammaDouble(double x)
+static inline double clampGammaDouble(double x)
 {
     constexpr double minx = (1/DBL_MAX) + 0.00001;
     return CLAMP(x, minx, 170.0);
 }
 
-inline double betaFN(double a, double b)
+static inline double betaFN(double a, double b)
 {
     return tgamma(a)*tgamma(b)/tgamma(a+b);
 }
 
-inline double lbetaFn(double a, double b)
+static inline double lbetaFn(double a, double b)
 {
     return exp(lgamma(a)+lgamma(b)-lgamma(a+b));
 }
 
 
-inline double betaPDF(double x, double a, double b)
+static inline double betaPDF(double x, double a, double b)
 {
     return pow(x, a-1) * pow(1-x, b-1) / betaFN(a,b); // could cache gammas here
 }
 
 
-inline double betaMode(double a, double b)
+static inline double betaMode(double a, double b)
 {
     if( a > 1 && b > 1)
         return (a-1)/(a+b-2);
@@ -181,7 +186,7 @@ inline double betaMode(double a, double b)
 }
 
 
-inline double getBetaScalar(double a, double b, double stepsize)
+static inline double getBetaScalar(double a, double b, double stepsize)
 {
     
     // reusing denominator: (betaNum / betaDen) == betaPDF
@@ -213,7 +218,7 @@ inline double getBetaScalar(double a, double b, double stepsize)
     
 }
 
-inline double betaMax(double a, double b)
+static inline double betaMax(double a, double b)
 {
     return betaPDF( betaMode(a, b), a, b );
 }

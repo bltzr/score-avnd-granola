@@ -20,17 +20,17 @@
 
 #define CLAMP(a, lo, hi) ( (a)>(lo)?( (a)<(hi)?(a):(hi) ):(lo) )
 
-inline double linear_interp( double v0, double v1, double t)
+static constexpr inline double linear_interp( double v0, double v1, double t)
 {
     return v0+((v1-v0)*t);
 }
 
-inline double cubicInterpolate (double a, double b, double c, double d, double x)
+static constexpr inline double cubicInterpolate (double a, double b, double c, double d, double x)
 {
     return b + 0.5 * x*(c - a + x*(2.0*a - 5.0*b + 4.0*c - d + x*(3.0*(b - c) + d - a)));
 }
 
-inline double wrapDouble(double p_current, double tablesize)
+static inline double wrapDouble(double p_current, double tablesize)
 {
     if( p_current < 0)
         return fmod(p_current, tablesize) + tablesize;
@@ -63,7 +63,7 @@ inline double fastPrecisePow(double a, const double b) {
     return r * u.d;
 }
 
-inline double expA(double x0) // approx exp(x) (more accurate than 'fastexp()') from sm_filter_pack
+static inline double expA(double x0) // approx exp(x) (more accurate than 'fastexp()') from sm_filter_pack
 {
     double x = 0.999996 + (0.031261316 + (0.00048274797 + 0.000006 * x0) * x0) * x0;
     x *= x; x *= x; x *= x; x *= x; x *= x;
