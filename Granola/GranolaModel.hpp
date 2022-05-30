@@ -31,7 +31,7 @@ public:
   {
     struct : halp::soundfile_port<"Sound"> {
        void update(Granola& self) {
-          qDebug() << "sound changed: " << soundfile.filename.data();//std::string{name()}.c_str();
+          //qDebug() << "sound changed: " << soundfile.filename.data();//std::string{name()}.c_str();
        }
     } sound;
     //halp::soundfile_port<"Window", double> win; // not supported yet
@@ -57,7 +57,6 @@ public:
     } channel_offset;
     struct : halp::spinbox_i32<"Max Voices", halp::range{0, 1024, 32}> {
        void update(Granola& self) {
-          qDebug() << "num voices changed: " << value;//std::string{name()}.c_str();
           self.grains.resize(value);
        }
     } num_voices;
