@@ -35,7 +35,7 @@ void GranuGrain::set(double start,
                      const boost::container::static_vector<double, NCHAN>& amps,
                      const halp::soundfile_port<"Sound">&  buf_proxy,
                      //const halp::soundfile_port<"Window">& wind_proxy,
-                     double sr,
+                     //double sr,
                      bool loopmode,
                      long windowType,
                      long channel_offset,
@@ -43,7 +43,7 @@ void GranuGrain::set(double start,
 {
     m_buf_len = buf_proxy.frames() - 1;
     m_buf_chans = buf_proxy.channels();
-    m_buf_sr = sr;
+    //m_buf_sr = sr;
     //m_buf_index = buffer_index;
     m_src_channels = src_channels;
 

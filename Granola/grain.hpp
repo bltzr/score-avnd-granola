@@ -12,6 +12,7 @@
 #include <boost/dynamic_bitset.hpp>
 
 #define NCHAN 8
+
 struct GranuGrain
 {
     bool        m_active = false;
@@ -58,7 +59,7 @@ struct GranuGrain
              const boost::container::static_vector<double, NCHAN>& amps,
              const halp::soundfile_port<"Sound">&  buf_proxy,
              //const halp::soundfile_port<"Window">& wind_proxy, // future holder of optional window buffer
-             double sr,
+             //double sr,
              bool loopmode,
              long windowType,
              long channel_offset,

@@ -117,7 +117,7 @@ void Granola::operator()(tick t)
                                 ampvec,
                                 inputs.sound,
                                 //NULL, // future holder of optional window buffer
-                                samplerate,
+                                //samplerate,
                                 inputs.loopmode,
                                 inputs.window_mode,
                                 ch_offset,
