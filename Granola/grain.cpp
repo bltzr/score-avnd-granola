@@ -101,7 +101,7 @@ void GranuGrain::set(double start,
      poke(m_yexp,     yexp,                             i, 0, 0);
      _count += 1;
      */
-    
+
     if( m_src_channels > 1 )
     {
         if( amps.size() == m_src_channels )
@@ -191,21 +191,25 @@ std::span<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, long inte
     // to do: pre-allocate everything when dsp is reset and don't use dynamic memory here
 
    // printf("incr_src_channels %ld\n", nchans);
-    
-    double _sampIdx = 0;
-    
-    double phase = m_phase_counter == m_max_count ? 1. : m_phase_counter * m_incr;
-    
-    if( m_direction ) // true == backwards
-        _sampIdx = m_startpoint + ((1 - phase) * m_playlen);
-    else
-        _sampIdx = m_startpoint + (phase * m_playlen);
 
     
-    if( m_loop_mode )
-        _sampIdx = wrapDouble(_sampIdx, m_buf_len);
+    const double phase = m_phase_counter == m_max_count ? 1. : m_phase_counter * m_incr;
+    const double win = window(phase);
     
-    
+    const double _sampIdx = [&] {
+      double _sampIdx = 0.;
+      if( m_direction ) // true == backwards
+          _sampIdx = m_startpoint + ((1 - phase) * m_playlen);
+      else
+          _sampIdx = m_startpoint + (phase * m_playlen);
+
+      if( m_loop_mode )
+          _sampIdx = wrapDouble(_sampIdx, m_buf_len);
+      return _sampIdx;
+    }();
+
+    const double floorSampIdx = std::floor(_sampIdx);
+    const double ceilSampIdx = std::ceil(_sampIdx);
     
     double lowerSamp, upperSamp, frac, a1, b, c, d, upperVal;
     double _playSamp = 0;
@@ -218,8 +222,8 @@ std::span<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, long inte
         switch (interpType)
             {
                 case LINEAR:
-                    lowerSamp = floor(_sampIdx);
-                    upperSamp = ceil(_sampIdx);
+                    lowerSamp = floorSampIdx;
+                    upperSamp = ceilSampIdx;
                     
                     
                     if( m_loop_mode )
@@ -265,7 +269,7 @@ std::span<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, long inte
         */
             
            
-            _playSamp *= window(phase);
+            _playSamp *= win;
      
             amps[i] = _playSamp * m_chan_amp[i] ;
         // to do: pre-allocate everything when dsp is reset and don't use dynamic memory here
