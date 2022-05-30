@@ -1,6 +1,8 @@
 #include "Granola.hpp"
 #include "utils.hpp"
 
+#include <boost/container/static_vector.hpp>
+
 
 namespace Granola
 {
@@ -30,21 +32,23 @@ void Granola::clear() {
 
 void Granola::operator()(tick t)
 {
+  using namespace std;
   if(!inputs.sound)
         return;
 
-  int n_channels = CLAMP(inputs.src_channels, 1, inputs.sound.channels());
-  int ch_offset = CLAMP(inputs.channel_offset, 0, inputs.sound.channels()-n_channels);
+  const int n_channels = CLAMP(inputs.src_channels, 1, inputs.sound.channels());
+  const int ch_offset = CLAMP(inputs.channel_offset, 0, inputs.sound.channels()-n_channels);
 
-  std::vector<double> ampvec(n_channels, sizeof(double));
-  for (int i = 0; i<n_channels; i++){
-      ampvec[i] = 1.0f; // useDefaultAmp ? 1.0f : amps[i]; // add this when we want to use amp vectors
+  boost::container::static_vector<double, NCHAN> ampvec(n_channels, 1.);
+  for (int i = 0; i < n_channels; i++) {
+      // ampvec[i] = 1.0f; useDefaultAmp ? 1.0f : amps[i]; // add this when we want to use amp vectors
                                                  // amps[i][j] if we use vectors from an audio port (as in granubuf_mc)
                                                  // also move below in for (int j = 0; j < t.frames; j++)
+
       maxAmp = ampvec[i] > maxAmp ? ampvec[i] : maxAmp;
   }
 
-  std::vector<double> windcoef(2, sizeof(double));
+  boost::container::static_vector<double, 2> windcoef(2, 0.);
 
 /*
   qDebug() << "snd channels: " << inputs.sound.channels();
@@ -74,10 +78,8 @@ void Granola::operator()(tick t)
       maxAmp = 1;
       busyCount = 0;
 
-      for (int i = 0; i < outputs.audio.channels(); i++){
-        // Output buffer for channel i, also a std::span.
-        auto out = outputs.audio.channel(i, t.frames);
-             out[k] = 0.;
+      for (int i = 0; i < outputs.audio.channels(); i++) {
+        outputs.audio.samples[i][k]  = 0.;
       }
 
       for( long i = 0; i < inputs.num_voices; i++ )
@@ -104,8 +106,8 @@ void Granola::operator()(tick t)
               //qDebug() << "grain triggered";
               if( !grains[i].m_active )
               {
-                  windcoef[0] = 1. + inputs.win_coefs.value.y*wc_radius*cos(inputs.win_coefs.value.x*PI/2.);
-                  windcoef[1] = 1. + inputs.win_coefs.value.y*wc_radius*sin(inputs.win_coefs.value.x*PI/2.);
+                  windcoef[0] = 1. + inputs.win_coefs.value.y * wc_radius * std::cos(inputs.win_coefs.value.x*PI/2.);
+                  windcoef[1] = 1. + inputs.win_coefs.value.y * wc_radius * std::sin(inputs.win_coefs.value.x*PI/2.);
 
                   grains[i].set(inputs.pos,
                                 inputs.dur,
@@ -115,6 +117,7 @@ void Granola::operator()(tick t)
                                 ampvec,
                                 inputs.sound,
                                 //NULL, // future holder of optional window buffer
+                                samplerate,
                                 inputs.loopmode,
                                 inputs.window_mode,
                                 ch_offset,
@@ -133,8 +136,7 @@ void Granola::operator()(tick t)
 
               for( int j = 0; j < n_channels; j++)
               {
-                  auto out = outputs.audio.channel(j, t.frames);
-                  out[k] += outSamps[j] * inputs.gain;
+                  outputs.audio.samples[j][k] += outSamps[j] * inputs.gain;
               }
 
               busyCount++;

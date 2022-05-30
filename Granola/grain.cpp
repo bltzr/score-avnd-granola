@@ -31,8 +31,8 @@ void GranuGrain::set(double start,
                      double dur_samps,
                      double rate,
                      //long buffer_index,
-                     std::vector<double> shape_coef,
-                     std::vector<double> amps,
+                     const boost::container::static_vector<double, 2>& shape_coef,
+                     const boost::container::static_vector<double, NCHAN>& amps,
                      const halp::soundfile_port<"Sound">&  buf_proxy,
                      //const halp::soundfile_port<"Window">& wind_proxy,
                      double sr,
@@ -47,10 +47,9 @@ void GranuGrain::set(double start,
     //m_buf_index = buffer_index;
     m_src_channels = src_channels;
 
-    amp_init.reserve(m_src_channels);
-    for (int i = 0; i < m_src_channels; i++)
-        amp_init.emplace_back(0.);
-    
+    amp_init.clear();
+    amp_init.resize(m_src_channels);
+
    // m_src_channels = CLAMP(src_channels, 1, m_buf_chans);
     m_channel_offset = CLAMP(channel_offset, 0, m_buf_chans - 1);
     
@@ -88,9 +87,9 @@ void GranuGrain::set(double start,
         m_playlen = ( playlen <= playmax ) ? playlen : playmax;
     }
     
+    const auto prev_count = m_max_count;
     m_incr = rate / m_playlen; // or m_playlen - 1?
     m_max_count = round(m_playlen / rate);
-    
 
     //m_phase = rate < 0;
     //printf("direction %i playlen %f count max %ld\n", m_direction, m_playlen, m_max_count);
@@ -102,7 +101,7 @@ void GranuGrain::set(double start,
      poke(m_yexp,     yexp,                             i, 0, 0);
      _count += 1;
      */
-    
+
     if( m_src_channels > 1 )
     {
         if( amps.size() == m_src_channels )
@@ -110,12 +109,7 @@ void GranuGrain::set(double start,
         else
         {
             m_chan_amp.clear();
-            m_chan_amp.reserve(m_src_channels);
-            
-            for( int i = 0; i < m_src_channels; i++ )
-            {
-                m_chan_amp[i] = amps[0];
-            }
+            m_chan_amp.resize(m_src_channels);
         }
     }
     else
@@ -123,6 +117,16 @@ void GranuGrain::set(double start,
         m_chan_amp = amps;
     }
     
+
+    if(prev_count != m_max_count || m_wind_type != windowType || m_shape != shape_coef)
+    {
+      m_shape = shape_coef;
+      m_window_update.clear();
+      m_window_update.resize(m_max_count + 1);
+      m_window.resize(m_max_count + 1);
+    }
+
+
     m_wind_type = windowType;
 
     // to do soon: deal with how to switch window types, buffers?
@@ -160,8 +164,15 @@ void GranuGrain::set(double start,
 
 
 
-double GranuGrain::window(double phase)
+double GranuGrain::window(long phase_index)
 {
+  phase_index = std::clamp(phase_index, (long)0, (long)m_max_count);
+  if(m_window_update.test(phase_index))
+    return m_window[phase_index];
+
+  auto win = [=] {
+    const double phase = m_phase_counter == m_max_count ? 1. : m_phase_counter * m_incr;
+
     switch (m_wind_type) {
         case 0:
 
@@ -175,8 +186,13 @@ double GranuGrain::window(double phase)
         case 2:
             return kumaraswamy(phase, m_shape_x, m_shape_y) * m_wind_norm_coef;
         default:
-            return 0;
+            return 0.;
     }
+  }();
+
+  m_window[phase_index] = win;
+  m_window_update.set(phase_index);
+  return win;
 }
 
 typedef enum _granu_interp
@@ -187,99 +203,107 @@ typedef enum _granu_interp
 } eGInterp;
 
 
-std::span<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, long interpType )
+std::span<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, const long interpType)
 {
     // output amps is the src_channels here
-    size_t nchans = m_src_channels;
+    const size_t nchans = m_src_channels;
     
     std::span<double> amps(amp_init);
     //amps.reserve(nchans);
     // to do: pre-allocate everything when dsp is reset and don't use dynamic memory here
 
    // printf("incr_src_channels %ld\n", nchans);
+
+
+    const double win = window(m_phase_counter);
+
+    //qDebug() << phase << " : " << win;
     
-    double _sampIdx = 0;
-    
-    double phase = m_phase_counter == m_max_count ? 1. : m_phase_counter * m_incr;
-    
-    if( m_direction ) // true == backwards
-        _sampIdx = m_startpoint + ((1 - phase) * m_playlen);
-    else
-        _sampIdx = m_startpoint + (phase * m_playlen);
+    const double _sampIdx = [&] {
+      const double phase = m_phase_counter == m_max_count ? 1. : m_phase_counter * m_incr;
+      double _sampIdx = 0.;
+      if( m_direction ) // true == backwards
+          _sampIdx = m_startpoint + ((1 - phase) * m_playlen);
+      else
+          _sampIdx = m_startpoint + (phase * m_playlen);
+
+      if( m_loop_mode )
+          _sampIdx = wrapDouble(_sampIdx, m_buf_len);
+      return _sampIdx;
+    }();
 
     
-    if( m_loop_mode )
-        _sampIdx = wrapDouble(_sampIdx, m_buf_len);
-    
-    
-    
-    double lowerSamp, upperSamp, frac, a1, b, c, d, upperVal;
-    double _playSamp = 0;
 
-    for( int i = 0; (i < nchans) && (i < m_buf_chans); i++)
+
+    const int N = std::min((long)nchans, (long)m_buf_chans);
+
     {
+      const bool loop = m_loop_mode;
+      for(int i = 0; i < N; i++)
+      {
         int chan = ( i + m_channel_offset < m_buf_chans) ? i + m_channel_offset : m_buf_chans - 1;
-        auto bufferData = snd.channel(chan);
+        auto bufferData = snd.soundfile.data[chan];
+        double _playSamp;
 
         switch (interpType)
+        {
+          case LINEAR:
+          {
+            const double lowerSamp = std::floor(_sampIdx);
+            const double upperSamp = std::ceil(_sampIdx);
+            const double upperVal = loop
+                                    ? bufferData[ (long)wrapDouble(upperSamp, m_buf_len) ]
+                                    : ((upperSamp < m_buf_len) ? bufferData[ (long)upperSamp ] : 0.0);
+
+            const long lsamp = lowerSamp;
+            _playSamp = linear_interp( bufferData[ lsamp ], upperVal, _sampIdx - lowerSamp);
+            break;
+          }
+
+          case CUBIC:
+          {
+            double a1, b, c, d;
+            const double lowerSamp = std::floor(_sampIdx);
+            const double frac = _sampIdx - lowerSamp;
+            const long lsamp = lowerSamp;
+
+            if(loop)
             {
-                case LINEAR:
-                    lowerSamp = floor(_sampIdx);
-                    upperSamp = ceil(_sampIdx);
-                    
-                    
-                    if( m_loop_mode )
-                        upperVal = bufferData[ (long)wrapDouble(upperSamp, m_buf_len) ];
-                    else
-                        upperVal = (upperSamp < m_buf_len) ? bufferData[ (long)upperSamp ] : 0.0;
-                    
-                    _playSamp = linear_interp( bufferData[ (long)lowerSamp ], upperVal, _sampIdx - lowerSamp);
-                    break;
-                    
-                case CUBIC:
-                    lowerSamp = floor(_sampIdx);
-                    frac = _sampIdx - lowerSamp;
-                    
-                    if( m_loop_mode ){
-                        a1 = (long)lowerSamp - 1 < 0 ? 0 : bufferData[ i + m_buf_chans * (long)wrapDouble(lowerSamp - 1, m_buf_len)  ];
-                        b = bufferData[  (long)lowerSamp  ];
-                        c = bufferData[  (long)wrapDouble(lowerSamp + 1, m_buf_len) ];
-                        d = bufferData[  (long)wrapDouble(lowerSamp + 2, m_buf_len) ];
-                    }
-                    else
-                    {
-                        a1 = (long)lowerSamp - 1 < 0 ? 0 : bufferData[ ((long)lowerSamp - 1)  ];
-                        b = bufferData[ (long)lowerSamp  ];
-                        c = ((long)lowerSamp + 1) >= m_buf_len ? 0 : bufferData[ ((long)lowerSamp + 1) ];
-                        d = ((long)lowerSamp + 2) >= m_buf_len ? 0 : bufferData[ ((long)lowerSamp + 2) ];
-                    }
-                   
-                    
-                    _playSamp = cubicInterpolate(a1,b,c,d,frac);
-                    break;
-                    
-                case NONE:
-                default:
-                    _playSamp = bufferData[ (long)_sampIdx  ];
-                    break;
+              a1 = lsamp - 1 < 0 ? 0 : bufferData[ i + m_buf_chans * (long)wrapDouble(lowerSamp - 1, m_buf_len)  ];
+              b = bufferData[  lsamp  ];
+              c = bufferData[  (long)wrapDouble(lowerSamp + 1, m_buf_len) ];
+              d = bufferData[  (long)wrapDouble(lowerSamp + 2, m_buf_len) ];
             }
+            else
+            {
+              a1 = lsamp - 1 < 0 ? 0 : bufferData[ (lsamp - 1)  ];
+              b = bufferData[ lsamp  ];
+              c = (lsamp + 1) >= m_buf_len ? 0 : bufferData[ (lsamp + 1) ];
+              d = (lsamp + 2) >= m_buf_len ? 0 : bufferData[ (lsamp + 2) ];
+            }
+
+            _playSamp = cubicInterpolate(a1,b,c,d,frac);
+            break;
+          }
+          case NONE:
+          default:
+            _playSamp = bufferData[ (long)_sampIdx  ];
+            break;
+        }
         /*
             // window
             double px = fastPrecisePow(m_phase, exp(m_shape_x));
             double ax = sin( PI * px);
             double windX = fastPrecisePow( ax, exp(m_shape_y));
         */
-            
-           
-            _playSamp *= window(phase);
-     
-            amps[i] = _playSamp * m_chan_amp[i] ;
-        // to do: pre-allocate everything when dsp is reset and don't use dynamic memory here
 
+
+        amps[i] = _playSamp * win * m_chan_amp[i] ;
+        // to do: pre-allocate everything when dsp is reset and don't use dynamic memory here
+      }
     }
 
-    long missingCh = nchans - m_buf_chans;
-    if( missingCh > 0)
+    if(long missingCh = nchans - m_buf_chans; missingCh > 0)
     {
         while( missingCh-- )
         {
@@ -290,7 +314,7 @@ std::span<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, long inte
     //m_phase += m_incr;
     m_phase_counter++;
     
-    if(  m_phase_counter > m_max_count ) {
+    if(m_phase_counter > m_max_count ) {
      //   printf("released at phase %.17g prev %.17g incr %.17g\n", phase, phase-m_incr, m_incr );
      //   printf("counter %ld maxcount %ld \n", m_phase_counter, m_max_count );
         reset();
