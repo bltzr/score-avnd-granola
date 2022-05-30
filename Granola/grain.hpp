@@ -8,6 +8,9 @@
 
 #include <halp/controls.hpp>
 
+#include <boost/container/static_vector.hpp>
+
+#define NCHAN 8
 struct GranuGrain
 {
     bool        m_active = false;
@@ -22,7 +25,7 @@ struct GranuGrain
     double      m_shape_y = 1.;
     double      m_wind_norm_coef = 1.0;
     
-    std::vector<double> m_chan_amp;
+    boost::container::static_vector<double, NCHAN> m_chan_amp;
 
     long        m_buf_chans = 1;
     double      m_buf_len = 0;
@@ -46,15 +49,15 @@ struct GranuGrain
              double dur_samps,
              double rate,
              //long buffer_index, // add this when we have several buffers
-             std::vector<double> shape_coef, // if one number then look for window, if two do shaping?, or add another inlet for
-             std::vector<double> amps,
+             const boost::container::static_vector<double, 2>& shape_coef, // if one number then look for window, if two do shaping?, or add another inlet for
+             const boost::container::static_vector<double, NCHAN>& amps,
              const halp::soundfile_port<"Sound">&  buf_proxy,
              //const halp::soundfile_port<"Window">& wind_proxy, // future holder of optional window buffer
              double sr,
-             bool loopmode = false,
-             long windowType = 2,
-             long channel_offset = 0,
-             long src_channels = 1);
+             bool loopmode,
+             long windowType,
+             long channel_offset,
+             long src_channels);
     
     
     //std::vector<double> incr( float *bufferData, long interpType );

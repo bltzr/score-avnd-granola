@@ -31,8 +31,8 @@ void GranuGrain::set(double start,
                      double dur_samps,
                      double rate,
                      //long buffer_index,
-                     std::vector<double> shape_coef,
-                     std::vector<double> amps,
+                     const boost::container::static_vector<double, 2>& shape_coef,
+                     const boost::container::static_vector<double, NCHAN>& amps,
                      const halp::soundfile_port<"Sound">&  buf_proxy,
                      //const halp::soundfile_port<"Window">& wind_proxy,
                      double sr,
@@ -47,10 +47,9 @@ void GranuGrain::set(double start,
     //m_buf_index = buffer_index;
     m_src_channels = src_channels;
 
-    amp_init.reserve(m_src_channels);
-    for (int i = 0; i < m_src_channels; i++)
-        amp_init.emplace_back(0.);
-    
+    amp_init.clear();
+    amp_init.resize(m_src_channels);
+
    // m_src_channels = CLAMP(src_channels, 1, m_buf_chans);
     m_channel_offset = CLAMP(channel_offset, 0, m_buf_chans - 1);
     
@@ -110,12 +109,7 @@ void GranuGrain::set(double start,
         else
         {
             m_chan_amp.clear();
-            m_chan_amp.reserve(m_src_channels);
-            
-            for( int i = 0; i < m_src_channels; i++ )
-            {
-                m_chan_amp[i] = amps[0];
-            }
+            m_chan_amp.resize(m_src_channels);
         }
     }
     else
@@ -279,6 +273,7 @@ std::span<double> GranuGrain::incr(halp::soundfile_port<"Sound">& snd, long inte
     }
 
     long missingCh = nchans - m_buf_chans;
+
     if( missingCh > 0)
     {
         while( missingCh-- )
