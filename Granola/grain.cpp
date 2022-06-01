@@ -109,7 +109,7 @@ void GranuGrain::set(double start,
         else
         {
             m_chan_amp.clear();
-            m_chan_amp.resize(m_src_channels);
+            m_chan_amp.resize(m_src_channels, amps[0]);
         }
     }
     else

@@ -48,13 +48,8 @@ void Granola::operator()(tick t)
       maxAmp = ampvec[i] > maxAmp ? ampvec[i] : maxAmp;
   }
 
-  boost::container::static_vector<double, 2> windcoef(2, 0.);
+  boost::container::static_vector<double, 2> windcoef(2, 1.);
 
-/*
-  qDebug() << "snd channels: " << inputs.sound.channels();
-  qDebug() << "out channels: " << n_channels;
-  qDebug() << "channel offset: " << ch_offset;
-*/
 
   if( buf_soft_lock ){
           for ( int k = 0; k < t.frames; k++){
@@ -72,7 +67,10 @@ void Granola::operator()(tick t)
       //qDebug() << trigger_counter;
       trigger = trigger_counter >= inputs.sound.frames() * inputs.dur /
                 (inputs.density * ((inputs.rate < 0) ? -inputs.rate : inputs.rate)) ;
-      if (trigger) { trigger_counter = 0; }//qDebug() << " triggering grain";}
+      if (trigger) {
+          trigger_counter = 0;
+          inputs.density += inputs.density * std::normal_distribution<float>(0., inputs.dens_j_r / 4)(rd) * inputs.dens_j;
+      } //qDebug() << " triggering grain";}
 
       alloccheck = false;
       maxAmp = 1;
@@ -84,17 +82,6 @@ void Granola::operator()(tick t)
 
       for( long i = 0; i < inputs.num_voices; i++ )
       {
-/*
-          qDebug() <<
-          "alloccheck" << alloccheck <<
-          "trigger" << trigger <<
-          "busyCount" << busyCount <<
-          "current voice" << i <<
-          "inputs.num_voices" << inputs.num_voices <<
-          "maxAmp" << maxAmp <<
-          "inputs.dur" << inputs.dur <<
-          "inputs.rate" << inputs.rate;
-*/
 
           if(!alloccheck &&
              trigger &&
@@ -109,9 +96,10 @@ void Granola::operator()(tick t)
                   windcoef[0] = 1. + inputs.win_coefs.value.y * wc_radius * std::cos(inputs.win_coefs.value.x*PI/2.);
                   windcoef[1] = 1. + inputs.win_coefs.value.y * wc_radius * std::sin(inputs.win_coefs.value.x*PI/2.);
 
-                  grains[i].set(inputs.pos,
-                                inputs.dur,
-                                inputs.rate * ((inputs.reverse) ? -1 : 1),
+                  grains[i].set(inputs.pos + std::normal_distribution<float>(0., inputs.pos_j_r / 4)(rd) * inputs.pos_j,
+                                inputs.dur + std::normal_distribution<float>(0., inputs.dur_j_r / 4)(rd) * inputs.dur_j,
+                                (inputs.rate + std::normal_distribution<float>(0., inputs.rate_j_r / 4)(rd) * inputs.rate_j)
+                                             *  ((inputs.reverse) ? -1 : 1),
                                 //_bufIdx,
                                 windcoef,
                                 ampvec,

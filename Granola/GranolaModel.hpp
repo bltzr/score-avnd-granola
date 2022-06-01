@@ -2,13 +2,18 @@
 
 #include <halp/audio.hpp>
 #include <halp/controls.hpp>
+#include <halp/mappers.hpp>
 #include <halp/meta.hpp>
 #include <halp/sample_accurate_controls.hpp>
 
 #include <cmath>
+#include <random>
+#include <rnd/random.hpp>
+
 #include "utils.hpp"
 
 #include "grain.hpp"
+
 #include <QDebug>
 
 
@@ -30,17 +35,27 @@ public:
   struct ins
   {
     struct : halp::soundfile_port<"Sound"> {
-       void update(Granola& self) {
-          //qDebug() << "sound changed: " << soundfile.filename.data();//std::string{name()}.c_str();
-       }
+       void update(Granola& self) {}
     } sound;
     //halp::soundfile_port<"Window", double> win; // not supported yet
     halp::hslider_f32<"Position", halp::range{0., 1., 0.}> pos;
+    halp::hslider_f32<"Position Jitter", halp::range{0., 1., 0.}> pos_j;
+    halp::knob_f32<"Position Jitter Range", halp::range{0., 1., 1.}> pos_j_r;
     halp::hslider_f32<"Duration", halp::range{0., 1., 0.}> dur;
-    halp::knob_f32<"Rate", halp::range{0.000001, 10., 1.}> rate;
+    halp::hslider_f32<"Duration Jitter", halp::range{0., 1., 0.}> dur_j;
+    halp::knob_f32<"Duration Jitter Range", halp::range{0., 1., 1.}> dur_j_r;
+    struct : halp::knob_f32<"Rate", halp::range{0.000001, 10., 1.}> {
+        using mapper = halp::log_mapper<std::ratio<85, 100>>;
+    } rate;
+    halp::hslider_f32<"Rate Jitter", halp::range{0., 1., 0.}> rate_j;
+    halp::knob_f32<"Rate Jitter Range", halp::range{0., 1., 1.}> rate_j_r;
     halp::toggle<"Reverse"> reverse;
     halp::knob_f32<"Density", halp::range{0., 50., 0.}> density;
+    halp::hslider_f32<"Density Jitter", halp::range{0., 1., 0.}> dens_j;
+    halp::hslider_f32<"Density Jitter Range", halp::range{0., 50., 1.}> dens_j_r;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
+    halp::hslider_f32<"Gain Jitter", halp::range{0., 1., 0.}> gain_j;
+    halp::knob_f32<"Gain Jitter Range", halp::range{0., 1., 1.}> gain_j_r;
     halp::xy_pad_f32<"Window coefs", halp::range{0.f, 0.f, 0.f}> win_coefs;
     struct { halp__enum_combobox("Interpolation mode", Cubic, None, Linear, Cubic) } interp_type;
     struct { halp__enum_combobox("Window mode", Beta, Beta, Cos, Kuma) } window_mode;
@@ -97,6 +112,7 @@ public:
 
 private:
   float wc_radius{64.};
+  rnd::pcg rd;
 
 };
 
