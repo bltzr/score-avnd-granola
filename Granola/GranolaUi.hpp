@@ -20,16 +20,16 @@ struct Granola::ui
      halp_meta(layout, hbox)
      halp_meta(background, dark)
      struct {
-        halp_meta(name, "Controls")
-        halp_meta(layout, vbox)
-        halp_meta(background, dark)
+       halp_meta(name, "Controls")
+       halp_meta(layout, vbox)
+       halp_meta(background, dark)
          struct {
-            halp_meta(name, "Gain Controls")
-            halp_meta(layout, hbox)
-            halp_meta(background, dark)
-            halp::item<&ins::gain> gain;
-            halp::item<&ins::gain_j> gain_j;
-          } gain_box;
+           halp_meta(name, "Gain Controls")
+           halp_meta(layout, hbox)
+           halp_meta(background, dark)
+           halp::item<&ins::gain> gain;
+           halp::item<&ins::gain_j> gain_j;
+         } gain_box;
          struct {
             halp_meta(name, "Density Controls")
             halp_meta(layout, hbox)
