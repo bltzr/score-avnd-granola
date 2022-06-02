@@ -70,6 +70,7 @@ struct Granola::ui
             halp::item<&ins::dur_j> dur_j;
           } dur_box;
           halp::item<&ins::win_coefs> win_coefs;
+          halp::item<&ins::ta_range> ta_range;
      } shape_box;
    } controls;
 
