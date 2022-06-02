@@ -38,6 +38,7 @@ public:
        void update(Granola& self) {}
     } sound;
     //halp::soundfile_port<"Window", double> win; // not supported yet
+    halp::range_slider_f32<"In", halp::range_slider_range{-10, 100, {5, 20}}> ta_range;
     halp::hslider_f32<"Position", halp::range{0., 1., 0.}> pos;
     halp::hslider_f32<"Position Jitter", halp::range{0., 1., 0.}> pos_j;
     halp::knob_f32<"Position Jitter Range", halp::range{0., 1., 1.}> pos_j_r;
