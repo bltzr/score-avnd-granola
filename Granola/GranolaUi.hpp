@@ -13,7 +13,13 @@ struct Granola::ui
   halp_meta(layout, vbox)
   halp_meta(background, darker)
   halp::label title{"Granulator"};
-  halp::item<&ins::sound> sound;
+  struct {
+     halp_meta(name, "Sound")
+     halp_meta(layout, hbox)
+     halp_meta(background, dark)
+     halp::item<&ins::sound> sound;
+     halp::item<&ins::ta_range> ta_range;
+  } sound_box;
   //halp::item<&ins::sound> win; not supported yet
   struct {
      halp_meta(name, "Controls")
@@ -70,7 +76,6 @@ struct Granola::ui
             halp::item<&ins::dur_j> dur_j;
           } dur_box;
           halp::item<&ins::win_coefs> win_coefs;
-          halp::item<&ins::ta_range> ta_range;
      } shape_box;
    } controls;
 
