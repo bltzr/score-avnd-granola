@@ -38,24 +38,26 @@ public:
        void update(Granola& self) {}
     } sound;
     //halp::soundfile_port<"Window", double> win; // not supported yet
-    halp::range_slider_f32<"In", halp::range_slider_range{-10, 100, {5, 20}}> ta_range;
+    //halp::range_slider_f32<"In", halp::range_slider_range{-10, 100, {5, 20}}> ta_range;
     halp::hslider_f32<"Position", halp::range{0., 1., 0.}> pos;
     halp::hslider_f32<"Position Jitter", halp::range{0., 1., 0.}> pos_j;
     halp::knob_f32<"Position Jitter Range", halp::range{0., 1., 1.}> pos_j_r;
     halp::hslider_f32<"Duration", halp::range{0., 1., 0.}> dur;
     halp::hslider_f32<"Duration Jitter", halp::range{0., 1., 0.}> dur_j;
     halp::knob_f32<"Duration Jitter Range", halp::range{0., 1., 1.}> dur_j_r;
-    struct : halp::knob_f32<"Rate", halp::range{0.000001, 10., 1.}> {
-        using mapper = halp::log_mapper<std::ratio<85, 100>>;
+    struct : halp::knob_f32<"Pitch", halp::range{0.000001, 10., 1.}> {
+        using mapper = halp::inverse_mapper<halp::pow_mapper<4>>;
     } rate;
-    halp::hslider_f32<"Rate Jitter", halp::range{0., 1., 0.}> rate_j;
-    halp::knob_f32<"Rate Jitter Range", halp::range{0., 1., 1.}> rate_j_r;
+    halp::vslider_f32<"Pitch Jitter", halp::range{0., 1., 0.}> rate_j;
+    halp::knob_f32<"Pitch Jitter Range", halp::range{0., 1., 1.}> rate_j_r;
     halp::toggle<"Reverse"> reverse;
-    halp::knob_f32<"Density", halp::range{0., 50., 0.}> density;
-    halp::hslider_f32<"Density Jitter", halp::range{0., 1., 0.}> dens_j;
+    struct : halp::knob_f32<"Density", halp::range{0., 50., 0.}> {
+        using mapper = halp::log_mapper<std::ratio<85, 100>>;
+    } density;
+    halp::vslider_f32<"Density Jitter", halp::range{0., 1., 0.}> dens_j;
     halp::hslider_f32<"Density Jitter Range", halp::range{0., 50., 1.}> dens_j_r;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
-    halp::hslider_f32<"Gain Jitter", halp::range{0., 1., 0.}> gain_j;
+    halp::vslider_f32<"Gain Jitter", halp::range{0., 1., 0.}> gain_j;
     halp::knob_f32<"Gain Jitter Range", halp::range{0., 1., 1.}> gain_j_r;
     halp::xy_pad_f32<"Window coefs", halp::range{0.f, 0.f, 0.f}> win_coefs;
     struct { halp__enum_combobox("Interpolation mode", Cubic, None, Linear, Cubic) } interp_type;
