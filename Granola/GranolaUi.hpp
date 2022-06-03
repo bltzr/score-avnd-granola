@@ -19,7 +19,7 @@ struct Granola::ui
     halp_meta(layout, hbox)
     halp_meta(background, dark)
     halp::item<&ins::sound> sound;
-    halp::item<&ins::ta_range> ta_range;
+    //halp::item<&ins::ta_range> ta_range;
   } sound_box;
   //halp::item<&ins::sound> win; not supported yet
   struct {
