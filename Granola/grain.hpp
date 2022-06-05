@@ -109,6 +109,13 @@ private:
 };
 
 
+
+static inline double pow_fast(double a, double b) {
+  union { double d; long long x; } u = { a };
+  u.x = (long long)(b * (u.x - 4606921278410026770LL) + 4606921278410026770LL);
+  return u.d;
+}
+
 static inline double kumaraswamy(double x, double a, double b)
 { // a and b >= 1
     return a * b * fastPrecisePow(x, a - 1.) * fastPrecisePow( 1. - fastPrecisePow(x, a), b - 1.);
@@ -118,7 +125,7 @@ static inline double kumaraswamy_peak(double a, double b)
 {
     if( (a <= 1) && (b <= 1) )
         return 1;
-    
+
     double mode = fastPrecisePow((a - 1)/(a*b - 1), 1. / a);
     return kumaraswamy(mode, a, b);
 }
@@ -134,10 +141,10 @@ static inline double fixDenorm(double x)
 // currently I'm not seeing the full range of the curve for a,b < 1, so maybe the phase needs to be scaled somehow
 static inline double betaNumerator(double x, double a, double b)
 {
-    const double num = pow(x, a-1) * pow(1-x, b-1);
-    
+    const double num = pow_fast(x, a-1) * pow_fast(1-x, b-1);
+
  //   if( std::isinf(num) ) printf("inf! x %f\n", x);
-    
+
     return std::isinf(num) ? 1 : num;
 }
 
@@ -160,7 +167,7 @@ static inline double lbetaFn(double a, double b)
 
 static inline double betaPDF(double x, double a, double b)
 {
-    return pow(x, a-1) * pow(1-x, b-1) / betaFN(a,b); // could cache gammas here
+    return pow_fast(x, a-1) * pow_fast(1-x, b-1) / betaFN(a,b); // could cache gammas here
 }
 
 
@@ -189,10 +196,10 @@ static inline double betaMode(double a, double b)
 
 static inline double getBetaScalar(double a, double b, double stepsize)
 {
-    
+
     // reusing denominator: (betaNum / betaDen) == betaPDF
     const double betaDenominator = lbetaFn(a, b);
-    
+
     if( a > 1 && b > 1)
         return 1. / (betaDenominator * ( betaNumerator( (a-1)/(a+b-2), a, b ) / betaDenominator ));
     else if( a > 1 && b == 1 )
@@ -214,9 +221,9 @@ static inline double getBetaScalar(double a, double b, double stepsize)
         return 1.;
     else
         printf("unknown situation a %f b %f\n", a, b);
-    
+
     return 0;
-    
+
 }
 
 static inline double betaMax(double a, double b)
