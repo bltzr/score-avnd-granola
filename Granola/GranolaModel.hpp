@@ -77,7 +77,7 @@ public:
           self.grains.resize(value);
        }
     } num_voices;
-    halp::range_slider_f32<"In", halp::range_slider_range{0, 100, {5, 20}}> ta_range;
+    halp::range_slider_f32<"In", halp::range_slider_range{0, 1, {0.25, 0.75}}> ta_range;
 
   } inputs;
 
