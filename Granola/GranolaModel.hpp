@@ -42,7 +42,7 @@ public:
     halp::hslider_f32<"Position", halp::range{0., 1., 0.}> pos;
     halp::hslider_f32<"Position Jitter", halp::range{0., 1., 0.}> pos_j;
     halp::knob_f32<"Position Jitter Range", halp::range{0., 1., 1.}> pos_j_r;
-    halp::hslider_f32<"Duration", halp::range{0., 1., 0.}> dur;
+    halp::hslider_f32<"Duration", halp::range{0., 1., 0.1}> dur;
     halp::hslider_f32<"Duration Jitter", halp::range{0., 1., 0.}> dur_j;
     halp::knob_f32<"Duration Jitter Range", halp::range{0., 1., 1.}> dur_j_r;
     struct : halp::knob_f32<"Pitch", halp::range{0.000001, 10., 1.}> {
@@ -51,8 +51,8 @@ public:
     halp::vslider_f32<"Pitch Jitter", halp::range{0., 1., 0.}> rate_j;
     halp::knob_f32<"Pitch Jitter Range", halp::range{0., 1., 1.}> rate_j_r;
     halp::toggle<"Reverse"> reverse;
-    struct : halp::knob_f32<"Density", halp::range{0., 50., 0.}> {
-        using mapper = halp::log_mapper<std::ratio<85, 100>>;
+    struct : halp::knob_f32<"Density", halp::range{0., 256., 1.}> {
+        using mapper = halp::log_mapper<std::ratio<99, 100>>;
     } density;
     halp::vslider_f32<"Density Jitter", halp::range{0., 1., 0.}> dens_j;
     halp::hslider_f32<"Density Jitter Range", halp::range{0., 50., 1.}> dens_j_r;
@@ -73,7 +73,7 @@ public:
           value = CLAMP(value, 0, self.inputs.sound.channels()-self.inputs.src_channels-1);
         }
     } channel_offset;
-    struct : halp::spinbox_i32<"Max Voices", halp::range{0, 1024, 32}> {
+    struct : halp::spinbox_i32<"Max Voices", halp::range{0, 256, 128}> {
        void update(Granola& self) {
           self.grains.resize(value);
        }

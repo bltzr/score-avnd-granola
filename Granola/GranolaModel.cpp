@@ -61,16 +61,19 @@ void Granola::operator()(tick t)
           return;
   }
 
+  float density = inputs.density * (1 + std::normal_distribution<float>(0., inputs.dens_j_r / 4)(rd) * inputs.dens_j) ;
+
   for (int k = 0; k < t.frames; k++)
   {
       ++trigger_counter;
       //qDebug() << trigger_counter;
       trigger = trigger_counter >= inputs.sound.frames() * inputs.dur /
-                (inputs.density * ((inputs.rate < 0) ? -inputs.rate : inputs.rate)) ;
+                (density * ((inputs.rate < 0) ? -inputs.rate : inputs.rate)) ;
       if (trigger) {
-          trigger_counter = 0;
-          inputs.density += inputs.density * std::normal_distribution<float>(0., inputs.dens_j_r / 4)(rd) * inputs.dens_j;
-      } //qDebug() << " triggering grain";}
+        trigger_counter = 0;
+        density = inputs.density * (1 + std::normal_distribution<float>(0., inputs.dens_j_r / 4)(rd) * inputs.dens_j);
+        //qDebug() << " triggering grain with density: " << density << "Busy count:" << busyCount;
+      }
 
       alloccheck = false;
       maxAmp = 1;
@@ -135,7 +138,7 @@ void Granola::operator()(tick t)
   // somehow dispaly the current number of active grains
   //out[numGrainOuts][k] = (double)busyCount;
 
-  //qDebug() << "Busy count:" << busyCount;
+  //qDebug() << "Busy count:" << busyCount << " / density: " << density << " / " << inputs.density;
 
   //}
 
