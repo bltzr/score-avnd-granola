@@ -179,9 +179,9 @@ double GranuGrain::window(long phase_index)
             return CLAMP(betaNumerator(phase, m_shape_x, m_shape_y) * m_wind_norm_coef, 0., 1.);
         case 1:
         {
-            double px = pow(phase, exp(m_shape_x)); //fastPrecisePow
+            double px = pow_fast(phase, exp(m_shape_x)); //fastPrecisePow
             double ax = sin( PI * px);
-            return pow( ax, exp(m_shape_y));
+            return pow_fast( ax, exp(m_shape_y));
         }
         case 2:
             return kumaraswamy(phase, m_shape_x, m_shape_y) * m_wind_norm_coef;
