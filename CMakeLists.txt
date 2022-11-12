@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
 
 if(NOT TARGET score_lib_base)
   include("${SCORE_SOURCE_DIR}/cmake/ScoreExternalAddon.cmake")
+else()
+  if(NOT TARGET score_plugin_avnd)
+    return()
+  endif()
 endif()
 
 project(score_addon_granola LANGUAGES CXX)
