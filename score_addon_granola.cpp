@@ -1,8 +1,10 @@
 #include "score_addon_granola.hpp"
-#include <Granola/Granola.hpp>
+
+#include <score/plugins/FactorySetup.hpp>
 
 #include <Avnd/Factories.hpp>
-#include <score/plugins/FactorySetup.hpp>
+#include <Granola/Granola.hpp>
+
 #include <score_plugin_engine.hpp>
 
 /**
@@ -11,12 +13,12 @@
 score_addon_granola::score_addon_granola() = default;
 score_addon_granola::~score_addon_granola() = default;
 
-std::vector<std::unique_ptr<score::InterfaceBase>>
-score_addon_granola::factories(
-    const score::ApplicationContext& ctx,
-    const score::InterfaceKey& key) const
+std::vector<std::unique_ptr<score::InterfaceBase>> score_addon_granola::factories(
+    const score::ApplicationContext& ctx, const score::InterfaceKey& key) const
 {
-  return Avnd::instantiate_fx<Granola::Granola>(ctx, key);
+  std::vector<std::unique_ptr<score::InterfaceBase>> fx;
+  Avnd::instantiate_fx<Granola::Granola>(fx, ctx, key);
+  return fx;
 }
 
 std::vector<score::PluginKey> score_addon_granola::required() const
