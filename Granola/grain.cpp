@@ -199,7 +199,7 @@ GranuGrain::incr(halp::soundfile_port<"Sound">& snd, const long interpType)
   // output amps is the src_channels here
   const size_t nchans = m_src_channels;
 
-  std::span<double> amps(amp_init);
+  std::span<double> amps(amp_init.data(), amp_init.size());
   //amps.reserve(nchans);
   // to do: pre-allocate everything when dsp is reset and don't use dynamic memory here
 
