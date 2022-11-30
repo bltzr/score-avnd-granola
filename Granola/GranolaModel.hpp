@@ -35,7 +35,10 @@ public:
   {
     struct : halp::soundfile_port<"Sound">
     {
-      void update(Granola& self) { }
+      void update(Granola& self)
+      {
+        self.outputs.audio.request_channels(this->channels());
+      }
     } sound;
     //halp::soundfile_port<"Window", double> win; // not supported yet
     //halp::range_slider_f32<"In", halp::range_slider_range{-10, 100, {5, 20}}> ta_range;
@@ -95,7 +98,7 @@ public:
 
   struct
   {
-    halp::fixed_audio_bus<"Output", double, NCHAN> audio;
+    halp::variable_audio_bus<"Output", double> audio;
   } outputs;
 
   struct ui;

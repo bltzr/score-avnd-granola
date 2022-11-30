@@ -56,7 +56,7 @@ void Granola::operator()(tick t)
   {
     for(int k = 0; k < t.frames; k++)
     {
-      for(int i = 0; i < outputs.audio.channels(); i++)
+      for(int i = 0; i < outputs.audio.channels; i++)
       {
         auto out = outputs.audio.channel(i, t.frames);
         out[k] = 0.0;
@@ -91,14 +91,13 @@ void Granola::operator()(tick t)
     maxAmp = 1;
     busyCount = 0;
 
-    for(int i = 0; i < outputs.audio.channels(); i++)
+    for(int i = 0; i < outputs.audio.channels; i++)
     {
       outputs.audio.samples[i][k] = 0.;
     }
 
     for(long i = 0; i < inputs.num_voices; i++)
     {
-
       if(!alloccheck && trigger && busyCount < inputs.num_voices && maxAmp > 0.
          && inputs.dur != 0. && inputs.rate != 0.)
       {
