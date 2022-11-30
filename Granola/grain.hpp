@@ -13,7 +13,7 @@
 
 #include <limits>
 
-#define NCHAN 8
+#define NCHAN 1
 
 struct GranuGrain
 {
