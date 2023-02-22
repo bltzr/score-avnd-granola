@@ -1,6 +1,6 @@
 
 #include "grain.hpp"
-
+#include <cmath>
 /**
  *  what's better, phase counter vs phase incr?
  *  doing phase += incr is nice for simplicy, but to really hit the last step is difficult due to rounding errors
@@ -36,6 +36,7 @@ void GranuGrain::set(
     //double sr,
     bool loopmode, long windowType, long channel_offset, long src_channels)
 {
+  using namespace std;
   m_buf_len = buf_proxy.frames() - 1;
   m_buf_chans = buf_proxy.channels();
   //m_buf_sr = sr;
