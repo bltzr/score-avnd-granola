@@ -13,6 +13,7 @@ void Granola::prepare(setup info)
   ms2samps = samplerate * 0.001;
 
   // create the appropriate number of grains:
+  grains.reserve(256);
   resize(inputs.num_voices);
 }
 
@@ -65,10 +66,9 @@ void Granola::operator()(tick t)
     return;
   }
 
-  float density = inputs.density
-                  * (1
-                     + std::normal_distribution<float>(0., inputs.dens_j_r / 4)(rd)
-                           * inputs.dens_j);
+  auto dist = std::normal_distribution<float>(0., inputs.dens_j_r / 4);
+
+  double density = inputs.density * (1 + dist(rd) * inputs.dens_j);
 
   for(int k = 0; k < t.frames; k++)
   {
@@ -80,10 +80,7 @@ void Granola::operator()(tick t)
     if(trigger)
     {
       trigger_counter = 0;
-      density = inputs.density
-                * (1
-                   + std::normal_distribution<float>(0., inputs.dens_j_r / 4)(rd)
-                         * inputs.dens_j);
+      density = inputs.density * (1 + dist(rd) * inputs.dens_j);
       //qDebug() << " triggering grain with density: " << density << "Busy count:" << busyCount;
     }
 
