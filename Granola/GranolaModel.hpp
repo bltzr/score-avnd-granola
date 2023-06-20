@@ -35,6 +35,7 @@ public:
   {
     struct : halp::soundfile_port<"Sound">
     {
+      halp_flag(waveform);
       void update(Granola& self)
       {
         self.outputs.audio.request_channels(this->channels());

@@ -134,7 +134,8 @@ void Granola::operator()(tick t)
       if(grains[i].m_active && grains[i].m_buf_len <= inputs.sound.frames())
       {
 
-        std::span<double> outSamps{grains[i].incr(inputs.sound, inputs.interp_type)};
+        std::span<double> outSamps{
+            grains[i].incr(inputs.sound, 0)}; //inputs.interp_type)};
 
         for(int j = 0; j < n_channels; j++)
         {
