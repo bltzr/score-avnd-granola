@@ -162,7 +162,7 @@ double GranuGrain::window(long phase_index)
   if(m_window_update.test(phase_index))
     return m_window[phase_index];
 
-  auto win = [=] {
+  auto win = [this] {
     const double phase = m_phase_counter == m_max_count ? 1. : m_phase_counter * m_incr;
 
     switch(m_wind_type)
