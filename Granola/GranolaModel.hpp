@@ -58,18 +58,6 @@ public:
     halp::vslider_f32<"Pitch Jitter", halp::range{0., 1., 0.}> rate_j;
     halp::knob_f32<"Pitch Jitter Range", halp::range{0., 1., 1.}> rate_j_r;
     halp::toggle<"Reverse"> reverse;
-    struct : halp::toggle<"Continuous", halp::toggle_setup{.init = true}> {
-      void update(Granola& self)
-      {
-        self.trigger = value;
-      }
-    }playing;
-    struct : halp::impulse_button<"Trigger"> {
-      /*void update(Granola& self)
-      {
-        self.trigger = true;
-      }*/
-    } trig;
     struct : halp::accurate<halp::knob_f32<"Density", halp::range{0., 256., 1.}>>
     {
       using mapper = halp::log_mapper<std::ratio<99, 100>>;
@@ -108,6 +96,18 @@ public:
     {
       void update(Granola& self) { self.grains.resize(value); }
     } num_voices;
+    struct : halp::toggle<"Continuous", halp::toggle_setup{.init = true}> {
+      void update(Granola& self)
+      {
+        self.trigger = value;
+      }
+    }playing;
+    struct : halp::impulse_button<"Trigger"> {
+      /*void update(Granola& self)
+      {
+        self.trigger = true;
+      }*/
+    } trig;
 
   } inputs;
 
