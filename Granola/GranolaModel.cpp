@@ -66,11 +66,13 @@ void Granola::operator()(tick t)
     return;
   }
 
+  //qDebug() << " TICK ! " ;
+
   auto dist = std::normal_distribution<float>(0., inputs.dens_j_r / 4);
 
   double density = inputs.density * (1 + dist(rd) * inputs.dens_j);
 
-  if (inputs.trig || inputs.playing) {
+  if (inputs.trig ) {
     trigger = true;
     /*trigger_counter = inputs.sound.frames() * inputs.dur
                / (density * ((inputs.rate < 0) ?
@@ -85,29 +87,16 @@ void Granola::operator()(tick t)
     maxAmp = 1;
     busyCount = 0;
 
-    if (inputs.playing) {
-      ++trigger_counter;
-      trigger = trigger_counter
-                >= inputs.sound.frames() * inputs.dur
-                       / (density * ((inputs.rate < 0) ?
-                                    -inputs.rate : inputs.rate));
-    }
-
-    if(trigger && inputs.playing)
-    {
-      trigger_counter = 0;
-      density = inputs.density * (1 + dist(rd) * inputs.dens_j);
-    }
+    //qDebug() << " trigger counter " << trigger_counter;
 
     for(int i = 0; i < outputs.audio.channels; i++)
     {
       outputs.audio.samples[i][k] = 0.;
     }
 
-
     for(long i = 0; i < inputs.num_voices; i++)
     {
-      if (trigger) qDebug() << "trigger voice # " << i ;
+      //if (trigger) qDebug() << "trigger voice # " << i ;
       if(!alloccheck && trigger //&& inputs.playing
          && busyCount < inputs.num_voices && maxAmp > 0.
          && inputs.dur != 0. && inputs.rate != 0.)
@@ -135,7 +124,7 @@ void Granola::operator()(tick t)
               //samplerate,
               inputs.loopmode, inputs.window_mode, ch_offset, n_channels);
 
-              qDebug()<< " triggering grain on voice #" << i
+              /*qDebug()<< " triggering grain on voice #" << i
                       << " with pos: " << pos
                       << " with duration: " << dur
                       << " -> end pos: " << pos + dur
@@ -143,15 +132,14 @@ void Granola::operator()(tick t)
                       << " with rate: " << rate
                       << " and density: " << density
                       << "Busy count:" << busyCount;
-              if (trigger) qDebug() << "trigger before # " << i ;
+              */
               trigger = false;
-              if (trigger) qDebug() << "trigger after # " << i ;
               alloccheck = true;
           }
 
        }
 
-      if(grains[i].m_active && grains[i].m_buf_len <= inputs.sound.frames())
+       if(grains[i].m_active && grains[i].m_buf_len <= inputs.sound.frames())
       {
 
         std::span<double> outSamps{
@@ -165,6 +153,18 @@ void Granola::operator()(tick t)
         busyCount++;
       }
 
+    }
+
+    if (inputs.playing) {
+      if (trigger_counter >= inputs.sound.frames() * inputs.dur
+                                / (density * ((inputs.rate < 0) ?
+                                                  -inputs.rate : inputs.rate)))
+      {
+        trigger = true;
+        trigger_counter = 0;
+        density = inputs.density * (1 + dist(rd) * inputs.dens_j);
+      }
+      ++trigger_counter;
     }
 
   }

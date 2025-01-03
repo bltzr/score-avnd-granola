@@ -59,7 +59,8 @@ void GranuGrain::set(
   // duration of grain
   // or if negative use the length of the original sample scaled by ratio
 
-  double gr_dur = (dur_samps <= 0 || dur_samps >= 1 - start) ? (1 - start) * m_buf_len : dur_samps * m_buf_len;
+  double gr_dur = (dur_samps <= 0 || dur_samps >= 1 ) ?  m_buf_len : dur_samps * m_buf_len;
+
 
   // phase goes 0-1
   // if rate is negative, then play backwards

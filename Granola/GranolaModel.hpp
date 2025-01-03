@@ -40,7 +40,7 @@ public:
       {
         self.outputs.audio.request_channels(this->channels());
         //if (self.inputs.playing) self.trigger = true;
-        qDebug() << "sound" << self.trigger;
+        //qDebug() << "sound" << self.trigger;
       }
     } sound;
     //halp::soundfile_port<"Window", double> win; // not supported yet
@@ -48,7 +48,7 @@ public:
     halp::hslider_f32<"Position", halp::range{0.00000001, 1., 0.00000001}> pos;
     halp::hslider_f32<"Position Jitter", halp::range{0., 1., 0.}> pos_j;
     halp::knob_f32<"Position Jitter Range", halp::range{0., 1., 1.}> pos_j_r;
-    halp::hslider_f32<"Duration", halp::range{0., 1., 0.1}> dur;
+    halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 0.1}> dur;
     halp::hslider_f32<"Duration Jitter", halp::range{0., 1., 0.}> dur_j;
     halp::knob_f32<"Duration Jitter Range", halp::range{0., 1., 1.}> dur_j_r;
     struct : halp::knob_f32<"Pitch", halp::range{0.000001, 10., 1.}>
@@ -62,14 +62,12 @@ public:
       void update(Granola& self)
       {
         self.trigger = value;
-        qDebug() << "cont" << self.trigger << "value"  << value;
       }
     }playing;
     struct : halp::impulse_button<"Trigger"> {
       /*void update(Granola& self)
       {
         self.trigger = true;
-        qDebug() << "trig" << self.trigger ;
       }*/
     } trig;
     struct : halp::accurate<halp::knob_f32<"Density", halp::range{0., 256., 1.}>>
