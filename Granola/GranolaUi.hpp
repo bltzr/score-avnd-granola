@@ -56,6 +56,14 @@ struct Granola::ui
           halp::item<&ins::reverse> reverse;
         } pitch_xtra_box;
       } rate_box;
+      struct
+      {
+        halp_meta(name, "Pitch_extra")
+        halp_meta(layout, hbox)
+        halp_meta(background, dark)
+        halp::item<&ins::playing> playing;
+        halp::item<&ins::trig> trig;
+      } play_box;
     } params_box;
     struct
     {

@@ -70,36 +70,48 @@ void Granola::operator()(tick t)
 
   double density = inputs.density * (1 + dist(rd) * inputs.dens_j);
 
+  if (inputs.trig || inputs.playing) {
+    trigger = true;
+    /*trigger_counter = inputs.sound.frames() * inputs.dur
+               / (density * ((inputs.rate < 0) ?
+                     -inputs.rate : inputs.rate));
+    //qDebug() << " trigger ! " ;*/
+  }
+
   for(int k = 0; k < t.frames; k++)
   {
-    ++trigger_counter;
-    //qDebug() << trigger_counter;
-    trigger = trigger_counter
-              >= inputs.sound.frames() * inputs.dur
-                     / (density * ((inputs.rate < 0) ? -inputs.rate : inputs.rate));
-    if(trigger)
-    {
-      trigger_counter = 0;
-      density = inputs.density * (1 + dist(rd) * inputs.dens_j);
-      //qDebug() << " triggering grain with density: " << density << "Busy count:" << busyCount;
-    }
 
     alloccheck = false;
     maxAmp = 1;
     busyCount = 0;
+
+    if (inputs.playing) {
+      ++trigger_counter;
+      trigger = trigger_counter
+                >= inputs.sound.frames() * inputs.dur
+                       / (density * ((inputs.rate < 0) ?
+                                    -inputs.rate : inputs.rate));
+    }
+
+    if(trigger && inputs.playing)
+    {
+      trigger_counter = 0;
+      density = inputs.density * (1 + dist(rd) * inputs.dens_j);
+    }
 
     for(int i = 0; i < outputs.audio.channels; i++)
     {
       outputs.audio.samples[i][k] = 0.;
     }
 
+
     for(long i = 0; i < inputs.num_voices; i++)
     {
-      if(!alloccheck && trigger && busyCount < inputs.num_voices && maxAmp > 0.
+      if (trigger) qDebug() << "trigger voice # " << i ;
+      if(!alloccheck && trigger //&& inputs.playing
+         && busyCount < inputs.num_voices && maxAmp > 0.
          && inputs.dur != 0. && inputs.rate != 0.)
       {
-
-        //qDebug() << "grain triggered";
         if(!grains[i].m_active)
         {
           windcoef[0] = 1.
@@ -109,27 +121,35 @@ void Granola::operator()(tick t)
                         + inputs.win_coefs.value.y * wc_radius
                               * std::sin(inputs.win_coefs.value.x * PI / 2.);
 
-          grains[i].set(
-              inputs.pos
-                  + std::normal_distribution<float>(0., inputs.pos_j_r / 4)(rd)
-                        * inputs.pos_j,
-              inputs.dur
-                  + std::normal_distribution<float>(0., inputs.dur_j_r / 4)(rd)
-                        * inputs.dur_j,
-              (inputs.rate
-               + std::normal_distribution<float>(0., inputs.rate_j_r / 4)(rd)
-                     * inputs.rate_j)
-                  * ((inputs.reverse) ? -1 : 1),
+          float pos = inputs.pos + std::normal_distribution<float>
+                                   (0., inputs.pos_j_r / 4)(rd) * inputs.pos_j;
+          float dur = inputs.dur + std::normal_distribution<float>
+                                   (0., inputs.dur_j_r / 4)(rd) * inputs.dur_j;
+          float rate = inputs.rate + std::normal_distribution<float>
+                                   (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j
+                                                   * ((inputs.reverse) ? -1 : 1);
+          grains[i].set( pos, dur, rate,
               //_bufIdx,
               windcoef, ampvec, inputs.sound,
               //NULL, // future holder of optional window buffer
               //samplerate,
               inputs.loopmode, inputs.window_mode, ch_offset, n_channels);
 
-          alloccheck = true;
-          trigger = false;
-        }
-      }
+              qDebug()<< " triggering grain on voice #" << i
+                      << " with pos: " << pos
+                      << " with duration: " << dur
+                      << " -> end pos: " << pos + dur
+                      << " sound length: " << inputs.sound.frames()
+                      << " with rate: " << rate
+                      << " and density: " << density
+                      << "Busy count:" << busyCount;
+              if (trigger) qDebug() << "trigger before # " << i ;
+              trigger = false;
+              if (trigger) qDebug() << "trigger after # " << i ;
+              alloccheck = true;
+          }
+
+       }
 
       if(grains[i].m_active && grains[i].m_buf_len <= inputs.sound.frames())
       {
@@ -144,10 +164,12 @@ void Granola::operator()(tick t)
 
         busyCount++;
       }
+
     }
+
   }
 
-  // somehow dispaly the current number of active grains
+  // somehow display the current number of active grains
   //out[numGrainOuts][k] = (double)busyCount;
 
   //qDebug() << "Busy count:" << busyCount << " / density: " << density << " / " << inputs.density;

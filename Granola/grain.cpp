@@ -54,12 +54,12 @@ void GranuGrain::set(
 
   //  post("shape coef size %ld %f", shape_coef.size(), shape_coef[0] );
 
-  m_startpoint = CLAMP(start, 0, 1) * m_buf_len;
+  m_startpoint = CLAMP(start, 0.00000001, 1) * m_buf_len; // for some reason start = 0 does some crazy shit
 
   // duration of grain
   // or if negative use the length of the original sample scaled by ratio
 
-  double gr_dur = (dur_samps <= 0 || dur_samps >= 1) ? m_buf_len : dur_samps * m_buf_len;
+  double gr_dur = (dur_samps <= 0 || dur_samps >= 1 - start) ? (1 - start) * m_buf_len : dur_samps * m_buf_len;
 
   // phase goes 0-1
   // if rate is negative, then play backwards
@@ -84,9 +84,9 @@ void GranuGrain::set(
     m_playlen = (playlen <= playmax) ? playlen : playmax;
   }
 
-  const auto prev_count = m_max_count;
   m_incr = rate / m_playlen; // or m_playlen - 1?
   m_max_count = round(m_playlen / rate);
+  const auto prev_count = m_max_count;
 
   //m_phase = rate < 0;
   //printf("direction %i playlen %f count max %ld\n", m_direction, m_playlen, m_max_count);
