@@ -85,9 +85,9 @@ void GranuGrain::set(
     m_playlen = (playlen <= playmax) ? playlen : playmax;
   }
 
+  const auto prev_count = m_max_count;
   m_incr = rate / m_playlen; // or m_playlen - 1?
   m_max_count = round(m_playlen / rate);
-  const auto prev_count = m_max_count;
 
   //m_phase = rate < 0;
   //printf("direction %i playlen %f count max %ld\n", m_direction, m_playlen, m_max_count);
