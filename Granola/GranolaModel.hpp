@@ -67,7 +67,7 @@ public:
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
     halp::vslider_f32<"Gain Jitter", halp::range{0., 1., 0.}> gain_j;
     halp::knob_f32<"Gain Jitter Range", halp::range{0., 1., 1.}> gain_j_r;
-    halp::xy_pad_f32<"Window coefs", halp::range{0.f, 0.f, 0.f}> win_coefs;
+    halp::xy_pad_f32<"Window coefs", halp::range{0.f, 1.f, 0.f}> win_coefs;
     struct
     {
       halp__enum_combobox("Interpolation mode", Cubic, None, Linear, Cubic)

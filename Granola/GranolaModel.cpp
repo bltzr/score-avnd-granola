@@ -105,10 +105,10 @@ void Granola::operator()(tick t)
         {
           windcoef[0] = 1.
                         + inputs.win_coefs.value.y * wc_radius
-                              * std::cos(inputs.win_coefs.value.x * PI / 2.);
+                              * std::cos((1-inputs.win_coefs.value.x) * PI / 2.);
           windcoef[1] = 1.
                         + inputs.win_coefs.value.y * wc_radius
-                              * std::sin(inputs.win_coefs.value.x * PI / 2.);
+                              * std::sin((1-inputs.win_coefs.value.x) * PI / 2.);
 
           float pos = inputs.pos + std::normal_distribution<float>
                                    (0., inputs.pos_j_r / 4)(rd) * inputs.pos_j;
