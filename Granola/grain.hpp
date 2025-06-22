@@ -5,6 +5,7 @@
 #include "utils.hpp"
 
 #include <boost/container/static_vector.hpp>
+#include <boost/container/vector.hpp>
 #include <boost/dynamic_bitset.hpp>
 
 #include <halp/soundfile_port.hpp>
@@ -33,7 +34,7 @@ struct GranuGrain
   boost::container::static_vector<double, NCHAN> m_chan_amp;
 
   boost::dynamic_bitset<> m_window_update;
-  std::vector<double> m_window;
+  boost::container::vector<double> m_window;
 
   long m_buf_chans = 1;
   double m_buf_len = 0;

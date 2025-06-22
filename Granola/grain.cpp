@@ -25,6 +25,8 @@ void GranuGrain::reset()
   m_shape_x = 1.;
   m_shape_y = 1.;
   m_phase_counter = 0;
+  m_window.reserve(8192);
+  m_window_update.reserve(8192);
 }
 
 void GranuGrain::set(
@@ -120,7 +122,7 @@ void GranuGrain::set(
     m_shape = shape_coef;
     m_window_update.clear();
     m_window_update.resize(m_max_count + 1);
-    m_window.resize(m_max_count + 1);
+    m_window.resize(m_max_count + 1, boost::container::default_init);
   }
 
   m_wind_type = windowType;
