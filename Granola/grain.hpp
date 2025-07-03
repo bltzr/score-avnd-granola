@@ -1,8 +1,11 @@
 #pragma once
 
+#include <bit>
 #include <vector>
 //#include "buffer_proxy.hpp"
 #include "utils.hpp"
+
+#include <ossia/math/safe_math.hpp>
 
 #include <boost/container/static_vector.hpp>
 #include <boost/container/vector.hpp>
@@ -105,13 +108,11 @@ private:
 
 static inline double pow_fast(double a, double b)
 {
-  union
-  {
-    double d;
-    long long x;
-  } u = {a};
-  u.x = (long long)(b * (u.x - 4606921278410026770LL) + 4606921278410026770LL);
-  return u.d;
+  static_assert(4606921278410026770.0 == (double)4606921278410026770LL);
+
+  return std::bit_cast<double>(static_cast<long long>(
+      (b * (std::bit_cast<long long>(a) - 4606921278410026770LL)
+       + 4606921278410026770.0)));
 }
 
 static inline double kumaraswamy(double x, double a, double b)
@@ -142,7 +143,7 @@ static inline double betaNumerator(double x, double a, double b)
 
   //   if( std::isinf(num) ) printf("inf! x %f\n", x);
 
-  return std::isinf(num) ? 1 : num;
+  return ossia::safe_isinf(num) ? 1 : num;
 }
 
 static inline double clampGammaDouble(double x)

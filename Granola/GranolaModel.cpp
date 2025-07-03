@@ -27,8 +27,8 @@ void Granola::resize(int n)
 
 void Granola::clear()
 {
-  for(long i = 0; i < grains.size(); i++)
-    grains[i].reset();
+  for(auto& grain : grains)
+    grain.reset();
 }
 
 void Granola::operator()(tick t)

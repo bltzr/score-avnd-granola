@@ -79,17 +79,15 @@ public:
     halp::toggle<"Loop"> loopmode;
     struct : halp::spinbox_i32<"Source Channels", halp::range{1, NCHAN, 1}>
     {
-      void update(Granola& self)
-      {
-        value = CLAMP(value, 1, self.inputs.sound.channels());
-      }
     } src_channels;
     struct : halp::spinbox_i32<"Channel Offset", halp::range{0, NCHAN - 1, 0}>
     {
       void update(Granola& self)
       {
-        value = CLAMP(
-            value, 0, self.inputs.sound.channels() - self.inputs.src_channels - 1);
+        int actual_src_chans = std::clamp(
+            self.inputs.src_channels.value, 1, self.inputs.sound.channels());
+
+        value = CLAMP(value, 0, self.inputs.sound.channels() - actual_src_chans - 1);
       }
     } channel_offset;
     struct : halp::spinbox_i32<"Max Voices", halp::range{0, 256, 128}>

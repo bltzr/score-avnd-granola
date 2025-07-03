@@ -19,7 +19,11 @@
 void GranuGrain::reset()
 {
   m_active = false;
-  m_chan_amp = {1};
+  amp_init.clear();
+  amp_init.reserve(NCHAN);
+  m_chan_amp.clear();
+  m_chan_amp.reserve(NCHAN);
+  m_chan_amp.push_back(1);
   m_buf_len = 0;
   m_incr = 0;
   m_shape_x = 1.;
@@ -175,9 +179,9 @@ double GranuGrain::window(long phase_index)
         return CLAMP(
             betaNumerator(phase, m_shape_x, m_shape_y) * m_wind_norm_coef, 0., 1.);
       case 1: {
-        double px = pow_fast(phase, exp(m_shape_x)); //fastPrecisePow
-        double ax = sin(PI * px);
-        return pow_fast(ax, exp(m_shape_y));
+        double px = std::pow(phase, std::exp(m_shape_x / 10.));
+        double ax = std::sin(std::numbers::pi * px);
+        return std::pow(ax, std::exp(m_shape_y / 10.));
       }
       case 2:
         return kumaraswamy(phase, m_shape_x, m_shape_y) * m_wind_norm_coef;

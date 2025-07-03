@@ -66,7 +66,6 @@ float cos_52s(float x)
 
 const float invtwopi = 0.1591549f;
 const float threehalfpi = 4.7123889f;
-const float quarterpi = 0.7853982f;
 
 float FTAcos(float angle)
 {
