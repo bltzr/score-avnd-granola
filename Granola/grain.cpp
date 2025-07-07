@@ -2,6 +2,8 @@
 #include "grain.hpp"
 
 #include <cmath>
+#include <numbers>
+
 /**
  *  what's better, phase counter vs phase incr?
  *  doing phase += incr is nice for simplicy, but to really hit the last step is difficult due to rounding errors
