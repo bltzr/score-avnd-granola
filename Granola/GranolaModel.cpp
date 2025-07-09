@@ -34,7 +34,7 @@ void Granola::clear()
 void Granola::operator()(tick t)
 {
   using namespace std;
-  if(!inputs.sound)
+  if(!inputs.sound || inputs.sound.channels() == 0)
     return;
 
   const int n_channels = CLAMP(inputs.src_channels, 1, inputs.sound.channels());
