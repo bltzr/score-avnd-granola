@@ -302,13 +302,8 @@ GranuGrain::incr(halp::soundfile_port<"Sound">& snd, const long interpType)
     }
   }
 
-  if(long missingCh = nchans - m_buf_chans; missingCh > 0)
-  {
-    while(missingCh--)
-    {
-      amps[missingCh] = amps.back();
-    }
-  }
+  for(size_t i = N; i < nchans; i++)
+    amps[i] = amps[N - 1];
 
   //m_phase += m_incr;
   m_phase_counter++;
