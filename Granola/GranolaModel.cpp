@@ -169,8 +169,7 @@ void Granola::operator()(tick t)
 
   }
 
-  // somehow display the current number of active grains
-  //out[numGrainOuts][k] = (double)busyCount;
+  outputs.active_grains = busyCount;
 
   //qDebug() << "Busy count:" << busyCount << " / density: " << density << " / " << inputs.density;
 

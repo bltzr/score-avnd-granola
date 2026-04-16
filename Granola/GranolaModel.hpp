@@ -106,6 +106,7 @@ public:
   struct
   {
     halp::variable_audio_bus<"Output", double> audio;
+    halp::val_port<"Active Grains", int> active_grains;
   } outputs;
 
   struct ui;
