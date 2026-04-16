@@ -1,11 +1,11 @@
 {
   "src": "<url to the .zip file created by the release script>",
-  "name": "My Avnd Effect",
-  "raw_name": "score-addon-my-avnd-effect",
-  "version": "1.0",
+  "name": "Granola",
+  "raw_name": "score-avnd-granola",
+  "version": "0.1",
   "kind": "addon",
-  "short": "Test audio effect add-on",
-  "long": "This addon provides an example audio effect",
-  "small": "https://raw.githubusercontent.com/OSSIA/score-addon-tutorial/master/Deployment/icon.png",
-  "key": "890F19FA-D27E-495F-9590-4878B8897C34"
+  "short": "Polyphonic granular sampler",
+  "long": "Granola is a granular synthesis effect. It loads a sound file and spawns up to 256 grains with configurable position, duration, pitch, density, and window shape (Beta/Cosine/Kumaraswamy), all with per-parameter jitter. Supports up to 8 output channels.",
+  "small": "",
+  "key": "1C857777-FE04-4A7D-9428-137954C83E8A"
 }
