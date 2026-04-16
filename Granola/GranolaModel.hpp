@@ -5,6 +5,7 @@
 
 #include <QDebug>
 
+#include <atomic>
 #include <halp/audio.hpp>
 #include <halp/controls.hpp>
 #include <halp/mappers.hpp>
@@ -111,7 +112,7 @@ public:
 
   GrainVec grains;
 
-  bool buf_soft_lock{false}; // useful?
+  std::atomic<bool> buf_soft_lock{false};
   bool alloccheck{false};
   bool trigger{false};
   long trigger_counter{0};
