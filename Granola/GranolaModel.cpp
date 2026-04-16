@@ -143,7 +143,7 @@ void Granola::operator()(tick t)
       {
 
         std::span<double> outSamps{
-            grains[i].incr(inputs.sound, 0)}; //inputs.interp_type)};
+            grains[i].incr(inputs.sound, (long)inputs.interp_type.value)};
 
         for(int j = 0; j < n_channels; j++)
         {
