@@ -32,6 +32,7 @@ struct Granola::ui
         halp_meta(background, background_dark)
         halp::item<&ins::gain> gain;
         halp::item<&ins::gain_j> gain_j;
+        halp::item<&ins::gain_j_r> gain_j_r;
       } gain_box;
       struct
       {
@@ -40,6 +41,7 @@ struct Granola::ui
         halp_meta(background, background_dark)
         halp::item<&ins::density> density;
         halp::item<&ins::dens_j> dens_j;
+        halp::item<&ins::dens_j_r> dens_j_r;
       } dens_box;
       struct
       {
@@ -53,6 +55,7 @@ struct Granola::ui
           halp_meta(layout, vbox)
           halp_meta(background, background_dark)
           halp::item<&ins::rate_j> rate_j;
+          halp::item<&ins::rate_j_r> rate_j_r;
           halp::item<&ins::reverse> reverse;
         } pitch_xtra_box;
       } rate_box;
@@ -77,6 +80,7 @@ struct Granola::ui
         halp_meta(background, background_dark)
         halp::item<&ins::pos> pos;
         halp::item<&ins::pos_j> pos_j;
+        halp::item<&ins::pos_j_r> pos_j_r;
       } pos_box;
       struct
       {
@@ -85,6 +89,7 @@ struct Granola::ui
         halp_meta(background, background_dark)
         halp::item<&ins::dur> dur;
         halp::item<&ins::dur_j> dur_j;
+        halp::item<&ins::dur_j_r> dur_j_r;
       } dur_box;
       halp::item<&ins::win_coefs> win_coefs;
     } shape_box;
