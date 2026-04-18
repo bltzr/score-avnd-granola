@@ -156,7 +156,7 @@ void Granola::operator()(tick t)
     }
 
     if (inputs.playing) {
-      if (trigger_counter >= inputs.sound.frames() * inputs.dur / density)
+      if (trigger_counter >= inputs.sound.frames() * inputs.dur / (density * inputs.rate))
       {
         trigger = true;
         trigger_counter = 0;

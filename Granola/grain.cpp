@@ -82,15 +82,13 @@ void GranuGrain::set(
   m_loop_mode = loopmode;
   if(loopmode)
   {
-    double playlen = round(rate * gr_dur);
-    m_playlen = playlen;
+    m_playlen = round(gr_dur);
   }
   else
   {
     gr_dur = (gr_dur >= m_buf_len) ? m_buf_len : gr_dur;
-    double playlen = round(rate * gr_dur);
     double playmax = m_buf_len - m_startpoint;
-    m_playlen = (playlen <= playmax) ? playlen : playmax;
+    m_playlen = std::min(round(gr_dur), playmax);
   }
 
   const auto prev_count = m_max_count;
