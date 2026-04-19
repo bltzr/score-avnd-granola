@@ -119,7 +119,6 @@ public:
   {
     bool active{false};
     double trigger_counter{0};
-    float pitch_ratio{1.f}; // rate * 2^((note - 60) / 12)
   };
 
   GrainVec grains;

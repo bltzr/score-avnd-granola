@@ -80,7 +80,6 @@ void Granola::operator()(tick t)
       auto& v = midi_voices[note];
       v.active = true;
       v.trigger_counter = 0;
-      v.pitch_ratio = inputs.rate * std::pow(2.f, (note - 60) / 12.f);
       midi_active = true;
     }
     else if(status == 0x80 || (status == 0x90 && vel == 0)) // note off
@@ -142,7 +141,8 @@ void Granola::operator()(tick t)
           float rate;
           if(midi_active)
           {
-            float base = midi_voices[midi_pending_voice].pitch_ratio;
+            // Recompute from current inputs.rate so glissandi take effect immediately
+            float base = inputs.rate * std::pow(2.f, (midi_pending_voice - 60) / 12.f);
             rate = base + std::normal_distribution<float>
                           (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j
                                           * ((inputs.reverse) ? -1 : 1);
