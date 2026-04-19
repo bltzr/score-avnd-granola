@@ -119,6 +119,7 @@ public:
   {
     bool active{false};
     double trigger_counter{0};
+    uint8_t velocity{0};
   };
 
   GrainVec grains;
