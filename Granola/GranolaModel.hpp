@@ -10,9 +10,12 @@
 #include <halp/controls.hpp>
 #include <halp/mappers.hpp>
 #include <halp/meta.hpp>
+#include <halp/midi.hpp>
 #include <halp/sample_accurate_controls.hpp>
+#include <libremidi/message.hpp>
 #include <rnd/random.hpp>
 
+#include <array>
 #include <cmath>
 
 #include <random>
@@ -100,6 +103,7 @@ public:
         self.trigger = true;
       }*/
     } trig;
+    halp::midi_bus<"MIDI In", libremidi::message> midi;
 
   } inputs;
 
@@ -110,6 +114,13 @@ public:
   } outputs;
 
   struct ui;
+
+  struct MidiVoice
+  {
+    bool active{false};
+    double trigger_counter{0};
+    float pitch_ratio{1.f}; // rate * 2^((note - 60) / 12)
+  };
 
   GrainVec grains;
 
@@ -124,6 +135,9 @@ public:
   float sampleinterval;
   double ms2samps;
   long numoutputs;
+
+  std::array<MidiVoice, 128> midi_voices{};
+  bool midi_active{false}; // true when at least one MIDI note is held
 
   // t_critical  lock; // is there an equivalent?
 
