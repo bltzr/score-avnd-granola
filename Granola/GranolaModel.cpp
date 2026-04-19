@@ -120,8 +120,9 @@ void Granola::operator()(tick t)
 
     for(long i = 0; i < inputs.num_voices; i++)
     {
-      //if (trigger) qDebug() << "trigger voice # " << i ;
-      if(!alloccheck && trigger //&& inputs.playing
+      const bool should_spawn = midi_active ? (midi_pending_voice >= 0)
+                                            : trigger;
+      if(!alloccheck && should_spawn
          && busyCount < inputs.num_voices && maxAmp > 0.
          && inputs.dur != 0. && inputs.rate != 0.)
       {
@@ -138,30 +139,34 @@ void Granola::operator()(tick t)
                                    (0., inputs.pos_j_r / 4)(rd) * inputs.pos_j;
           float dur = inputs.dur + std::normal_distribution<float>
                                    (0., inputs.dur_j_r / 4)(rd) * inputs.dur_j;
-          float rate = inputs.rate + std::normal_distribution<float>
-                                   (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j
-                                                   * ((inputs.reverse) ? -1 : 1);
-          grains[i].set( pos, dur, rate,
-              //_bufIdx,
-              windcoef, ampvec, inputs.sound,
-              //NULL, // future holder of optional window buffer
-              //samplerate,
-              inputs.loopmode, inputs.window_mode, ch_offset, n_channels);
-
-              /*qDebug()<< " triggering grain on voice #" << i
-                      << " with pos: " << pos
-                      << " with duration: " << dur
-                      << " -> end pos: " << pos + dur
-                      << " sound length: " << inputs.sound.frames()
-                      << " with rate: " << rate
-                      << " and density: " << density
-                      << "Busy count:" << busyCount;
-              */
-              trigger = false;
-              alloccheck = true;
+          float rate;
+          if(midi_active)
+          {
+            float base = midi_voices[midi_pending_voice].pitch_ratio;
+            rate = base + std::normal_distribution<float>
+                          (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j
+                                          * ((inputs.reverse) ? -1 : 1);
+            // advance to the next active voice
+            ++midi_pending_voice;
+            while(midi_pending_voice < 128 && !midi_voices[midi_pending_voice].active)
+              ++midi_pending_voice;
+            if(midi_pending_voice >= 128)
+              midi_pending_voice = -1;
+          }
+          else
+          {
+            rate = inputs.rate + std::normal_distribution<float>
+                                 (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j
+                                                 * ((inputs.reverse) ? -1 : 1);
+            trigger = false;
           }
 
-       }
+          grains[i].set(pos, dur, rate,
+              windcoef, ampvec, inputs.sound,
+              inputs.loopmode, inputs.window_mode, ch_offset, n_channels);
+          alloccheck = true;
+        }
+      }
 
        if(grains[i].m_active && grains[i].m_buf_len <= inputs.sound.frames())
       {
@@ -181,10 +186,21 @@ void Granola::operator()(tick t)
 
     if(midi_active)
     {
-      // TODO: per-voice grain spawning loop.
-      // For each active midi_voices[n], advance its trigger_counter and spawn
-      // a grain when due, passing v.pitch_ratio as the rate to grains[i].set().
-      // This replaces the single-voice trigger below when MIDI is in use.
+      // One shared trigger fires all active notes simultaneously.
+      // Grains are spawned one per sample over consecutive samples (via
+      // midi_pending_voice), so a chord of N notes costs N samples to fully spawn.
+      if(trigger_counter >= inputs.sound.frames() * inputs.dur / (density * inputs.rate))
+      {
+        // start scanning from the first active voice
+        midi_pending_voice = 0;
+        while(midi_pending_voice < 128 && !midi_voices[midi_pending_voice].active)
+          ++midi_pending_voice;
+        if(midi_pending_voice >= 128)
+          midi_pending_voice = -1;
+        trigger_counter = 0;
+        density = inputs.density * (1 + dist(rd) * inputs.dens_j);
+      }
+      ++trigger_counter;
     }
     else if(inputs.playing)
     {

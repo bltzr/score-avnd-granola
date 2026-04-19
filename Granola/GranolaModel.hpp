@@ -137,7 +137,8 @@ public:
   long numoutputs;
 
   std::array<MidiVoice, 128> midi_voices{};
-  bool midi_active{false}; // true when at least one MIDI note is held
+  bool midi_active{false};   // true when at least one MIDI note is held
+  int midi_pending_voice{-1}; // index of next voice to spawn (-1 = none pending)
 
   // t_critical  lock; // is there an equivalent?
 
