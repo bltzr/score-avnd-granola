@@ -104,6 +104,7 @@ public:
       }*/
     } trig;
     halp::midi_bus<"MIDI In", libremidi::message> midi;
+    halp::toggle<"listening to MIDI", halp::toggle_setup{.init = true}> midi_gate;
 
   } inputs;
 

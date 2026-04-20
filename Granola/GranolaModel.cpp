@@ -67,29 +67,39 @@ void Granola::operator()(tick t)
   }
 
   // Process incoming MIDI: update voice state for note on/off
-  for(const auto& msg : inputs.midi)
+  if(inputs.midi_gate)
   {
-    if(msg.bytes.size() < 3)
-      continue;
-    const uint8_t status = msg.bytes[0] & 0xF0;
-    const uint8_t note   = msg.bytes[1] & 0x7F;
-    const uint8_t vel    = msg.bytes[2] & 0x7F;
+    for(const auto& msg : inputs.midi)
+    {
+      if(msg.bytes.size() < 3)
+        continue;
+      const uint8_t status = msg.bytes[0] & 0xF0;
+      const uint8_t note   = msg.bytes[1] & 0x7F;
+      const uint8_t vel    = msg.bytes[2] & 0x7F;
 
-    if(status == 0x90 && vel > 0) // note on
-    {
-      auto& v = midi_voices[note];
-      v.active = true;
-      v.trigger_counter = 0;
-      v.velocity = vel;
-      midi_active = true;
+      if(status == 0x90 && vel > 0) // note on
+      {
+        auto& v = midi_voices[note];
+        v.active = true;
+        v.trigger_counter = 0;
+        v.velocity = vel;
+        midi_active = true;
+      }
+      else if(status == 0x80 || (status == 0x90 && vel == 0)) // note off
+      {
+        midi_voices[note].active = false;
+        midi_active = false;
+        for(const auto& v : midi_voices)
+          if(v.active) { midi_active = true; break; }
+      }
     }
-    else if(status == 0x80 || (status == 0x90 && vel == 0)) // note off
-    {
-      midi_voices[note].active = false;
-      midi_active = false;
-      for(const auto& v : midi_voices)
-        if(v.active) { midi_active = true; break; }
-    }
+  }
+  else if(midi_active)
+  {
+    // Gate closed — kill all active voices to avoid stuck notes
+    for(auto& v : midi_voices) v.active = false;
+    midi_active = false;
+    midi_pending_voice = -1;
   }
 
   auto dist = std::normal_distribution<float>(0., inputs.dens_j_r / 4);
