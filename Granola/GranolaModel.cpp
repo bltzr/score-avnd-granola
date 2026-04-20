@@ -74,6 +74,8 @@ void Granola::operator()(tick t)
       if(msg.bytes.size() < 3)
         continue;
       const uint8_t status = msg.bytes[0] & 0xF0;
+      if(status != 0x90 && status != 0x80)
+        continue;
       const uint8_t note   = msg.bytes[1] & 0x7F;
       const uint8_t vel    = msg.bytes[2] & 0x7F;
 
