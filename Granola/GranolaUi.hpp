@@ -177,7 +177,7 @@ struct settable_control : halp::control<F>
 // position jitter near its start edge, duration jitter near its end edge.
 struct WaveformItem
 {
-  static constexpr double width() { return 360.; }
+  static constexpr double width() { return 440.; }
   static constexpr double height() { return 100.; }
   static constexpr double pad = 2.;
 
@@ -191,8 +191,38 @@ struct WaveformItem
 
   std::function<void()> update;
 
-  // port setters, wired in ui::bus::init
+  // port setters: `set` is wired by the layout builder to the Sound folder
+  // port this widget is bound to; the others are wired in ui::bus::init
+  std::function<void(std::string)> set;
   std::function<void(float)> set_pos, set_dur, set_pos_j, set_dur_j;
+  std::function<void(int)> set_index;
+
+  // Drop of a sound folder (-> Sound folder port) or of an audio file
+  // (-> its folder + its stable name-sorted index, matching scan_folder)
+  bool drop(const std::vector<std::string>& paths)
+  {
+    if(paths.empty())
+      return false;
+    const QFileInfo fi(QString::fromStdString(paths[0]));
+    if(fi.isDir())
+    {
+      if(set)
+        set(fi.absoluteFilePath().toStdString());
+      return true;
+    }
+    static const QStringList exts{"*.wav", "*.aif", "*.aiff", "*.flac",
+                                  "*.mp3", "*.ogg",  "*.m4a"};
+    const QDir dir = fi.absoluteDir();
+    const auto files = dir.entryList(exts, QDir::Files, QDir::Name);
+    const int idx = files.indexOf(fi.fileName());
+    if(idx < 0)
+      return false; // not an audio file
+    if(set)
+      set(dir.absolutePath().toStdString());
+    if(set_index)
+      set_index(idx);
+    return true;
+  }
 
   // playback window geometry, shared by paint and gesture hit-testing;
   // full file when dur is 0 or >= 1 (same rule as GranuGrain::set)
@@ -283,7 +313,7 @@ struct WaveformItem
     else if(!name.empty())
       std::snprintf(label, sizeof(label), "%s", name.c_str());
     else
-      std::snprintf(label, sizeof(label), "(no sound bank)");
+      std::snprintf(label, sizeof(label), "drop a sound file or folder here");
     ctx.set_fill_color(halp::colors::lighter);
     ctx.set_font_size(9.);
     ctx.draw_text(pad + 3., pad + 10., label);
@@ -369,8 +399,10 @@ struct Granola::ui
   halp_meta(layout, vbox)
   halp_meta(background, background_darker)
   halp::label title{"Granulator"};
-  halp::custom_actions_item<WaveformItem> waveform;
-  halp::item<&ins::sound> sound;
+  // The waveform IS the sound-folder port's widget: dropping a file or
+  // folder on it writes the port's document value. The legacy single-file
+  // Sound port stays (fallback + saved scenarios) but is inspector-only.
+  halp::custom_control<WaveformItem, &ins::sound_folder> waveform;
   //halp::item<&ins::sound> win; not supported yet
   struct
   {
@@ -420,6 +452,7 @@ struct Granola::ui
         halp_meta(background, background_dark)
         halp::item<&ins::playing> playing;
         halp::item<&ins::trig> trig;
+        settable_control<&ins::sound_index> sound_index;
       } play_box;
     } params_box;
     struct
@@ -486,6 +519,10 @@ struct Granola::ui
       // items' set hooks are filled by the layout builder, which runs after
       // init_bus — hence the call-time indirection.
       auto& wf = self.waveform;
+      wf.set_index = [&self](int v) {
+        if(auto& c = self.controls.params_box.play_box.sound_index; c.set)
+          c.set(v);
+      };
       wf.set_pos = [&self](float v) {
         if(auto& c = self.controls.shape_box.pos_box.pos; c.set)
           c.set(v);
