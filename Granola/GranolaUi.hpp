@@ -155,14 +155,28 @@ struct WindowShapeItem
   }
 };
 
+// halp::control plus the score-side setter hook: the layout builder wires
+// `set` to write the port's document value (which then reaches the engine,
+// the inspector and back into on_control_update).
+template <auto F>
+struct settable_control : halp::control<F>
+{
+  std::function<void(typename halp::control<F>::control_value_type)> set;
+};
+
 // Waveform display for the sound picked by the Sound index port. Peaks come
 // from the processor over the message bus (see Granola::processor_to_ui);
 // the playback window overlay (position + duration, jitter bands at the
 // edges) is synced from the control ports in ui::on_control_update.
+//
+// Gestures (user-specified map): drag left-right anywhere moves position;
+// vertical drags change duration in the central part of the window,
+// position jitter near its start edge, duration jitter near its end edge.
 struct WaveformItem
 {
   static constexpr double width() { return 360.; }
   static constexpr double height() { return 100.; }
+  static constexpr double pad = 2.;
 
   std::vector<float> min_peaks, max_peaks;
   std::string name;
@@ -174,10 +188,26 @@ struct WaveformItem
 
   std::function<void()> update;
 
+  // port setters, wired in ui::bus::init
+  std::function<void(float)> set_pos, set_dur, set_pos_j, set_dur_j;
+
+  // playback window geometry, shared by paint and gesture hit-testing;
+  // full file when dur is 0 or >= 1 (same rule as GranuGrain::set)
+  double win_x0() const
+  {
+    return pad + std::clamp(double(pos), 0., 1.) * (width() - 2. * pad);
+  }
+  double win_x1() const
+  {
+    const double wdur = (dur <= 0.f || dur >= 1.f)
+                            ? 1.
+                            : std::min(double(pos) + double(dur), 1.) - double(pos);
+    return std::min(win_x0() + wdur * (width() - 2. * pad), width() - pad);
+  }
+
   void paint(auto ctx)
   {
     constexpr double w = width(), h = height();
-    constexpr double pad = 2.;
     const double mid = h / 2.;
     const double yscale = (h / 2.) - pad;
 
@@ -206,13 +236,8 @@ struct WaveformItem
       ctx.set_stroke_width(1.);
       ctx.stroke();
 
-      // playback window: [pos, pos + dur], full file when dur is 0 or >= 1
-      // (same rule as GranuGrain::set)
-      const double x0 = pad + std::clamp(double(pos), 0., 1.) * (w - 2. * pad);
-      const double wdur = (dur <= 0.f || dur >= 1.f)
-                              ? 1.
-                              : std::min(double(pos) + double(dur), 1.) - double(pos);
-      const double x1 = std::min(x0 + wdur * (w - 2. * pad), w - pad);
+      const double x0 = win_x0();
+      const double x1 = win_x1();
       ctx.begin_path();
       ctx.draw_rect(x0, pad, x1 - x0, h - 2. * pad);
       auto win = ctx.to_rgba(halp::colors::editable_value_mid);
@@ -259,6 +284,76 @@ struct WaveformItem
     ctx.set_fill_color(halp::colors::lighter);
     ctx.set_font_size(9.);
     ctx.draw_text(pad + 3., pad + 10., label);
+  }
+
+  enum class drag_zone
+  {
+    none,
+    window,     // vertical -> duration
+    start_edge, // vertical -> position jitter
+    end_edge    // vertical -> duration jitter
+  };
+  drag_zone m_zone{drag_zone::none};
+  double m_press_x{}, m_press_y{};
+  float m_pos0{}, m_dur0{}, m_pos_j0{}, m_dur_j0{};
+  bool m_dragging{false};
+
+  bool mouse_press(double x, double y)
+  {
+    m_press_x = x;
+    m_press_y = y;
+    m_pos0 = pos;
+    m_dur0 = dur;
+    m_pos_j0 = pos_j;
+    m_dur_j0 = dur_j;
+
+    constexpr double edge = 10.;
+    const double x0 = win_x0(), x1 = win_x1();
+    if(std::abs(x - x0) <= edge)
+      m_zone = drag_zone::start_edge;
+    else if(std::abs(x - x1) <= edge)
+      m_zone = drag_zone::end_edge;
+    else if(x > x0 && x < x1)
+      m_zone = drag_zone::window;
+    else
+      m_zone = drag_zone::none;
+    m_dragging = true;
+    return true;
+  }
+
+  void mouse_move(double x, double y)
+  {
+    if(!m_dragging)
+      return;
+    // horizontal: position, always; vertical: zone-dependent, up = increase
+    const float dxn = float((x - m_press_x) / (width() - 2. * pad));
+    const float dyn = float((m_press_y - y) / (height() - 2. * pad));
+    if(set_pos)
+      set_pos(std::clamp(m_pos0 + dxn, 1e-8f, 1.f));
+    switch(m_zone)
+    {
+      case drag_zone::window:
+        if(set_dur)
+          set_dur(std::clamp(m_dur0 + dyn, 1e-8f, 1.f));
+        break;
+      case drag_zone::start_edge:
+        if(set_pos_j)
+          set_pos_j(std::clamp(m_pos_j0 + dyn, 0.f, 1.f));
+        break;
+      case drag_zone::end_edge:
+        if(set_dur_j)
+          set_dur_j(std::clamp(m_dur_j0 + dyn, 0.f, 1.f));
+        break;
+      default:
+        break;
+    }
+  }
+
+  void mouse_release(double x, double y)
+  {
+    mouse_move(x, y);
+    m_dragging = false;
+    m_zone = drag_zone::none;
   }
 };
 
@@ -334,8 +429,8 @@ struct Granola::ui
         halp_meta(name, "Position Controls")
         halp_meta(layout, hbox)
         halp_meta(background, background_dark)
-        halp::control<&ins::pos> pos;
-        halp::control<&ins::pos_j> pos_j;
+        settable_control<&ins::pos> pos;
+        settable_control<&ins::pos_j> pos_j;
         halp::control<&ins::pos_j_r> pos_j_r;
       } pos_box;
       struct
@@ -343,8 +438,8 @@ struct Granola::ui
         halp_meta(name, "Duration Controls")
         halp_meta(layout, hbox)
         halp_meta(background, background_dark)
-        halp::control<&ins::dur> dur;
-        halp::control<&ins::dur_j> dur_j;
+        settable_control<&ins::dur> dur;
+        settable_control<&ins::dur_j> dur_j;
         halp::control<&ins::dur_j_r> dur_j_r;
       } dur_box;
       struct
@@ -384,6 +479,27 @@ struct Granola::ui
     std::function<void(ui_to_processor)> send_message;
     void init(ui& self)
     {
+      // Wire the waveform gestures to the ports' document values. The
+      // items' set hooks are filled by the layout builder, which runs after
+      // init_bus — hence the call-time indirection.
+      auto& wf = self.waveform;
+      wf.set_pos = [&self](float v) {
+        if(auto& c = self.controls.shape_box.pos_box.pos; c.set)
+          c.set(v);
+      };
+      wf.set_pos_j = [&self](float v) {
+        if(auto& c = self.controls.shape_box.pos_box.pos_j; c.set)
+          c.set(v);
+      };
+      wf.set_dur = [&self](float v) {
+        if(auto& c = self.controls.shape_box.dur_box.dur; c.set)
+          c.set(v);
+      };
+      wf.set_dur_j = [&self](float v) {
+        if(auto& c = self.controls.shape_box.dur_box.dur_j; c.set)
+          c.set(v);
+      };
+
       // The panel may be (re)created long after execution started: ask the
       // processor to resend the current sound's envelope.
       send_message(ui_to_processor{});
