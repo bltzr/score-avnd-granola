@@ -83,14 +83,14 @@ coefs** are global to the folder or local to the currently picked sound.
   no per-file dimension, doesn't travel with the folder). The folder-level
   file is copyable as a preset across sessions/projects and live-reloadable
   with the existing watch pattern. Debounced write from a worker on change.
-- **Open design point — decide during the session** (both options acceptable,
-  document the choice): (a) on file switch, write stored values back into the
-  actual control ports (investigate score's
-  `Crousti/ExecutorUpdateControlValueInUi.hpp` — never used by us yet), so
-  knobs/automation stay meaningful in local mode; or (b) in local mode the
-  waveform widget is the source of truth (edits go straight to the store via
-  the bus) and the ports only apply in global mode — simpler, but local values
-  aren't automatable. Bias toward (a) if it works without fighting score.
+- **RESOLVED by the user**: control write-back is required. On file switch in
+  local mode, stored values are written back to the pos/dur/jitter ports so
+  the inspector AND the wfui widget reflect them (investigate score's
+  `Crousti/ExecutorUpdateControlValueInUi.hpp` — never used by us yet). The
+  ports REMAIN (inspector visibility, automation, cables), but once the
+  waveform widget is operational, REMOVE the pos/dur+jitters sliders from the
+  process panel layout in `GranolaUi.hpp` (declarative: just stop listing
+  them) — the widget becomes the only in-scenario surface for these params.
 
 ## Background (not tasks)
 
