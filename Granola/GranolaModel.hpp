@@ -199,8 +199,11 @@ public:
   using tick = halp::tick;
   void operator()(tick t);
 
+  // Radius of the (angle, amount) -> (beta a, beta b) mapping for the window
+  // coefs XY pad; shared with the window-shape widget in GranolaUi.hpp.
+  static constexpr float wc_radius{64.};
+
 private:
-  float wc_radius{64.};
   rnd::pcg rd;
 };
 
