@@ -133,6 +133,28 @@ public:
 
   struct ui;
 
+  // --- Waveform UI messaging (score message bus, both directions).
+  // The displayed sound is the one picked by the Sound index port ONLY;
+  // MIDI-zone voices must not drive the display.
+  struct processor_to_ui
+  {
+    std::vector<float> min_peaks, max_peaks;
+    std::string name;
+    float duration_s{};
+  };
+  struct ui_to_processor
+  {
+    // For now just a refresh request, sent when the UI panel is (re)created;
+    // the phase-2 gesture map will extend this.
+  };
+
+  std::function<void(processor_to_ui)> send_message;
+  void process_message(const ui_to_processor&) { ui_refresh = true; }
+
+  bool ui_refresh{true};
+  std::string ui_sound_name;
+  int64_t ui_sound_mtime{-1};
+
   struct MidiVoice
   {
     bool active{false};

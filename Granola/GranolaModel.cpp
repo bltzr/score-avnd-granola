@@ -66,6 +66,7 @@ void Granola::operator()(tick t)
   GrainSource cur{};
   std::shared_ptr<const void> cur_hold{};
   std::string_view cur_name;
+  const BankSound* cur_bank_snd{};
   if(!bank.sounds.empty())
   {
     const int N = (int)bank.sounds.size();
@@ -74,6 +75,7 @@ void Granola::operator()(tick t)
     cur = snd->view();
     cur_hold = snd;
     cur_name = snd->name;
+    cur_bank_snd = snd.get();
   }
   else if(inputs.sound && inputs.sound.channels() > 0)
   {
@@ -85,6 +87,26 @@ void Granola::operator()(tick t)
 
   if(outputs.current_sound.value != cur_name)
     outputs.current_sound.value = std::string(cur_name);
+
+  // Waveform UI: send the envelope of the index-picked sound when it changes
+  // (name or on-disk content), or when a (re)created UI asks for a refresh.
+  const int64_t cur_mtime = cur_bank_snd ? cur_bank_snd->mtime : 0;
+  if(send_message
+     && (ui_refresh || ui_sound_name != cur_name || ui_sound_mtime != cur_mtime))
+  {
+    processor_to_ui msg;
+    msg.name = cur_name;
+    if(cur_bank_snd)
+    {
+      msg.min_peaks = cur_bank_snd->min_peaks;
+      msg.max_peaks = cur_bank_snd->max_peaks;
+      msg.duration_s = cur_bank_snd->duration_s;
+    }
+    send_message(std::move(msg));
+    ui_refresh = false;
+    ui_sound_name = cur_name;
+    ui_sound_mtime = cur_mtime;
+  }
 
   if(!cur)
     return;

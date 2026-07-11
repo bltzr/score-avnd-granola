@@ -39,6 +39,11 @@ struct BankSound
   std::string name;
   int64_t mtime{};
 
+  // Downsampled min/max envelope over all channels, for the waveform UI.
+  // Computed once at scan time (worker thread) and cached with the sound.
+  std::vector<float> min_peaks, max_peaks;
+  float duration_s{};
+
   GrainSource view() const noexcept
   {
     return GrainSource{
@@ -46,6 +51,36 @@ struct BankSound
         double(ptrs.empty() ? 0 : data[0].size())};
   }
 };
+
+// Runs in the worker thread, right after decoding.
+inline void compute_peaks(BankSound& snd, double rate)
+{
+  if(snd.data.empty() || snd.data[0].empty() || rate <= 0)
+    return;
+  const std::size_t frames = snd.data[0].size();
+  snd.duration_s = float(frames / rate);
+
+  const std::size_t buckets = std::min<std::size_t>(1024, frames);
+  snd.min_peaks.assign(buckets, 0.f);
+  snd.max_peaks.assign(buckets, 0.f);
+  for(std::size_t b = 0; b < buckets; b++)
+  {
+    const std::size_t begin = b * frames / buckets;
+    const std::size_t end = std::max(begin + 1, (b + 1) * frames / buckets);
+    float lo = std::numeric_limits<float>::max();
+    float hi = std::numeric_limits<float>::lowest();
+    for(const auto& ch : snd.data)
+      for(std::size_t i = begin; i < end && i < ch.size(); i++)
+      {
+        lo = std::min(lo, ch[i]);
+        hi = std::max(hi, ch[i]);
+      }
+    if(lo > hi)
+      lo = hi = 0.f;
+    snd.min_peaks[b] = lo;
+    snd.max_peaks[b] = hi;
+  }
+}
 
 struct MidiZone
 {
@@ -129,6 +164,7 @@ inline SoundBank scan_folder(
     snd->ptrs.reserve(snd->data.size());
     for(auto& ch : snd->data)
       snd->ptrs.push_back(ch.data());
+    compute_peaks(*snd, rate);
     if(!snd->ptrs.empty())
       out.sounds.push_back(std::move(snd));
   }
