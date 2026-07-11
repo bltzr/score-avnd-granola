@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SoundBank.hpp"
 #include "grain.hpp"
 #include "utils.hpp"
 
@@ -110,12 +111,23 @@ public:
     halp::midi_bus<"MIDI In", libremidi::message> midi;
     halp::toggle<"listening to MIDI", halp::toggle_setup{.init = true}> midi_gate;
 
+    // --- Sound bank (multifile). New ports are appended at the end so saved
+    // scenarios keep their existing port ids.
+    halp::lineedit<"Sound folder", ""> sound_folder;
+    struct : halp::spinbox_i32<"Sound index", halp::range{0, 127, 0}>
+    {
+    } sound_index;
+    // JSON key-zone mapping, resolved inside the folder (or absolute path):
+    // { "zones": [ { "notes": [36,47], "sound": "kick.wav", "root": 40 } ] }
+    halp::lineedit<"MIDI map", ""> midi_map;
+
   } inputs;
 
   struct
   {
     halp::variable_audio_bus<"Output", double> audio;
     halp::val_port<"Active Grains", int> active_grains;
+    halp::val_port<"Current sound", std::string> current_sound;
   } outputs;
 
   struct ui;
@@ -144,6 +156,36 @@ public:
   std::array<MidiVoice, 128> midi_voices{};
   bool midi_active{false};   // true when at least one MIDI note is held
   int midi_pending_voice{-1}; // index of next voice to spawn (-1 = none pending)
+
+  // --- Sound bank: scanned/decoded in a worker thread, swapped on the
+  // processing thread. Active grains keep their sound via shared_ptr holds.
+  SoundBank bank;
+  long bank_scan_phase{0};
+  bool bank_scan_inflight{false};
+
+  struct scan_request
+  {
+    std::string folder;
+    std::string map_file;
+    double rate;
+    SoundBank previous;
+  };
+
+  struct worker_t
+  {
+    std::function<void(std::shared_ptr<scan_request>)> request;
+
+    static std::function<void(Granola&)> work(std::shared_ptr<scan_request> rq)
+    {
+      auto bank = scan_folder(rq->folder, rq->map_file, rq->rate, rq->previous);
+      return [bank = std::move(bank)](Granola& self) mutable {
+        self.bank = std::move(bank);
+        self.bank_scan_inflight = false;
+      };
+    }
+  } worker;
+
+  void request_scan();
 
   // t_critical  lock; // is there an equivalent?
 

@@ -21,6 +21,8 @@
 void GranuGrain::reset()
 {
   m_active = false;
+  m_source = {};
+  m_source_hold.reset();
   amp_init.clear();
   amp_init.reserve(NCHAN);
   m_chan_amp.clear();
@@ -37,17 +39,18 @@ void GranuGrain::reset()
 
 void GranuGrain::set(
     double start, double dur_samps, double rate,
-    //long buffer_index,
     const boost::container::static_vector<double, 2>& shape_coef,
     const boost::container::static_vector<double, NCHAN>& amps,
-    const halp::soundfile_port<"Sound">& buf_proxy,
+    const GrainSource& src, std::shared_ptr<const void> src_hold,
     //const halp::soundfile_port<"Window">& wind_proxy,
     //double sr,
     bool loopmode, long windowType, long channel_offset, long src_channels)
 {
   using namespace std;
-  m_buf_len = buf_proxy.frames() - 1;
-  m_buf_chans = buf_proxy.channels();
+  m_source = src;
+  m_source_hold = std::move(src_hold);
+  m_buf_len = src.frames - 1;
+  m_buf_chans = src.channels;
   //m_buf_sr = sr;
   //m_buf_index = buffer_index;
   m_src_channels = src_channels;
@@ -203,7 +206,7 @@ typedef enum _granu_interp
 } eGInterp;
 
 std::span<double>
-GranuGrain::incr(halp::soundfile_port<"Sound">& snd, const long interpType)
+GranuGrain::incr(const long interpType)
 {
   // output amps is the src_channels here
   const size_t nchans = m_src_channels;
@@ -239,7 +242,7 @@ GranuGrain::incr(halp::soundfile_port<"Sound">& snd, const long interpType)
     {
       int chan = (i + m_channel_offset < m_buf_chans) ? i + m_channel_offset
                                                       : m_buf_chans - 1;
-      auto bufferData = snd.soundfile.data[chan];
+      auto bufferData = m_source.data[chan];
       double _playSamp;
 
       switch(interpType)

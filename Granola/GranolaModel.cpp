@@ -15,6 +15,21 @@ void Granola::prepare(setup info)
   // create the appropriate number of grains:
   grains.reserve(256);
   resize(inputs.num_voices);
+
+  request_scan();
+}
+
+void Granola::request_scan()
+{
+  if(bank_scan_inflight)
+    return;
+  bank_scan_inflight = true;
+  auto rq = std::make_shared<scan_request>();
+  rq->folder = inputs.sound_folder.value;
+  rq->map_file = inputs.midi_map.value;
+  rq->rate = samplerate;
+  rq->previous = bank;
+  worker.request(std::move(rq));
 }
 
 void Granola::resize(int n)
@@ -34,12 +49,49 @@ void Granola::clear()
 void Granola::operator()(tick t)
 {
   using namespace std;
-  if(!inputs.sound || inputs.sound.channels() == 0)
+
+  // Periodic folder rescan (worker thread; ~2x/second), immediate on
+  // folder/map path change.
+  bank_scan_phase += t.frames;
+  const bool paths_changed = bank.folder != inputs.sound_folder.value
+                             || bank.map_file != inputs.midi_map.value;
+  if(paths_changed || bank_scan_phase >= (long)(samplerate / 2))
+  {
+    bank_scan_phase = 0;
+    request_scan();
+  }
+
+  // Current sound: bank entry selected by index, falling back to the legacy
+  // Sound port when no folder is set / the bank is empty.
+  GrainSource cur{};
+  std::shared_ptr<const void> cur_hold{};
+  std::string_view cur_name;
+  if(!bank.sounds.empty())
+  {
+    const int N = (int)bank.sounds.size();
+    const int idx = CLAMP(inputs.sound_index.value, 0, N - 1);
+    const auto& snd = bank.sounds[idx];
+    cur = snd->view();
+    cur_hold = snd;
+    cur_name = snd->name;
+  }
+  else if(inputs.sound && inputs.sound.channels() > 0)
+  {
+    cur = GrainSource{
+        inputs.sound.soundfile.data, inputs.sound.channels(),
+        (double)inputs.sound.frames()};
+    cur_name = "(sound port)";
+  }
+
+  if(outputs.current_sound.value != cur_name)
+    outputs.current_sound.value = std::string(cur_name);
+
+  if(!cur)
     return;
 
-  const int n_channels = CLAMP(inputs.src_channels, 1, inputs.sound.channels());
+  const int n_channels = CLAMP(inputs.src_channels, 1, (int)cur.channels);
   const int ch_offset
-      = CLAMP(inputs.channel_offset, 0, inputs.sound.channels() - n_channels);
+      = CLAMP(inputs.channel_offset, 0, (int)cur.channels - n_channels);
 
   boost::container::static_vector<double, NCHAN> ampvec(n_channels, 1.);
   for(int i = 0; i < n_channels; i++)
@@ -153,10 +205,25 @@ void Granola::operator()(tick t)
                                    (0., inputs.dur_j_r / 4)(rd) * inputs.dur_j;
           float rate;
           boost::container::static_vector<double, NCHAN> spawn_ampvec = ampvec;
+          // Per-voice source: MIDI zones can map this note to another sound
+          GrainSource spawn_src = cur;
+          std::shared_ptr<const void> spawn_hold = cur_hold;
+          int pitch_root = 60;
+          if(midi_active)
+          {
+            if(const auto* z = bank.zone_for(midi_pending_voice))
+            {
+              const auto& snd = bank.sounds[z->sound_index];
+              spawn_src = snd->view();
+              spawn_hold = snd;
+              pitch_root = z->root;
+            }
+          }
+
           if(midi_active)
           {
             // Recompute pitch from current inputs.rate so glissandi take effect immediately
-            float base = inputs.rate * std::pow(2.f, (midi_pending_voice - 60) / 12.f);
+            float base = inputs.rate * std::pow(2.f, (midi_pending_voice - pitch_root) / 12.f);
             rate = base + std::normal_distribution<float>
                           (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j
                                           * ((inputs.reverse) ? -1 : 1);
@@ -182,17 +249,17 @@ void Granola::operator()(tick t)
           }
 
           grains[i].set(pos, dur, rate,
-              windcoef, spawn_ampvec, inputs.sound,
+              windcoef, spawn_ampvec, spawn_src, spawn_hold,
               inputs.loopmode, inputs.window_mode, ch_offset, n_channels);
           alloccheck = true;
         }
       }
 
-       if(grains[i].m_active && grains[i].m_buf_len <= inputs.sound.frames())
+       if(grains[i].m_active)
       {
 
         std::span<double> outSamps{
-            grains[i].incr(inputs.sound, (long)inputs.interp_type.value)};
+            grains[i].incr((long)inputs.interp_type.value)};
 
         for(int j = 0; j < n_channels; j++)
         {
@@ -209,7 +276,7 @@ void Granola::operator()(tick t)
       // One shared trigger fires all active notes simultaneously.
       // Grains are spawned one per sample over consecutive samples (via
       // midi_pending_voice), so a chord of N notes costs N samples to fully spawn.
-      if(trigger_counter >= inputs.sound.frames() * inputs.dur / (density * inputs.rate))
+      if(trigger_counter >= cur.frames * inputs.dur / (density * inputs.rate))
       {
         // start scanning from the first active voice
         midi_pending_voice = 0;
@@ -224,7 +291,7 @@ void Granola::operator()(tick t)
     }
     else if(inputs.playing)
     {
-      if(trigger_counter >= inputs.sound.frames() * inputs.dur / (density * inputs.rate))
+      if(trigger_counter >= cur.frames * inputs.dur / (density * inputs.rate))
       {
         trigger = true;
         trigger_counter = 0;
