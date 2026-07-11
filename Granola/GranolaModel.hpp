@@ -40,6 +40,10 @@ public:
     struct : halp::soundfile_port<"Sound">
     {
       halp_flag(waveform);
+      // Reload automatically when the file changes on disk: lets Granola act
+      // as a live buffer player for the FluCoMa working folder (e.g. point it
+      // at nmf_resynth.wav and re-run BufNMF while playing).
+      halp_flag(file_watch);
       void update(Granola& self)
       {
         self.outputs.audio.request_channels(this->channels());
