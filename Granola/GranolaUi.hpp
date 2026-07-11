@@ -20,6 +20,9 @@ struct WindowShapeItem
   halp::xy_type<float> value{};
   halp::transaction<halp::xy_type<float>> transaction;
   std::function<void()> update;
+  // wired by the layout builder: writes the port's document value (used by
+  // the local-params write-back)
+  std::function<void(halp::xy_type<float>)> set;
   int mode{0}; // Window mode port, synced in ui::on_control_update
 
   static constexpr int curve_points = 128;
@@ -431,7 +434,7 @@ struct Granola::ui
         halp_meta(background, background_dark)
         settable_control<&ins::pos> pos;
         settable_control<&ins::pos_j> pos_j;
-        halp::control<&ins::pos_j_r> pos_j_r;
+        settable_control<&ins::pos_j_r> pos_j_r;
       } pos_box;
       struct
       {
@@ -440,7 +443,7 @@ struct Granola::ui
         halp_meta(background, background_dark)
         settable_control<&ins::dur> dur;
         settable_control<&ins::dur_j> dur_j;
-        halp::control<&ins::dur_j_r> dur_j_r;
+        settable_control<&ins::dur_j_r> dur_j_r;
       } dur_box;
       struct
       {
@@ -515,6 +518,26 @@ struct Granola::ui
       wf.duration_s = msg.duration_s;
       if(wf.update)
         wf.update();
+
+      // Local-params write-back: push the restored file params into the
+      // ports' document values so the inspector and widgets follow.
+      if(msg.has_params)
+      {
+        auto& sb = self.controls.shape_box;
+        const auto set = [](auto& control, float v) {
+          if(control.set)
+            control.set(v);
+        };
+        set(sb.pos_box.pos, msg.params.pos);
+        set(sb.pos_box.pos_j, msg.params.pos_j);
+        set(sb.pos_box.pos_j_r, msg.params.pos_j_r);
+        set(sb.dur_box.dur, msg.params.dur);
+        set(sb.dur_box.dur_j, msg.params.dur_j);
+        set(sb.dur_box.dur_j_r, msg.params.dur_j_r);
+        if(sb.win_box.win_coefs.set)
+          sb.win_box.win_coefs.set(
+              halp::xy_type<float>{msg.params.win_x, msg.params.win_y});
+      }
     }
   };
 

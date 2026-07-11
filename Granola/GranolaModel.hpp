@@ -122,6 +122,12 @@ public:
     // { "zones": [ { "notes": [36,47], "sound": "kick.wav", "root": 40 } ] }
     halp::lineedit<"MIDI map", ""> midi_map;
 
+    // Local-params mode: position, duration, their jitters and the window
+    // coefs become per-file, persisted to granola-params.json in the folder
+    // under the named set below.
+    halp::toggle<"Local params"> local_params;
+    halp::lineedit<"Params set", "default"> params_set;
+
   } inputs;
 
   struct
@@ -141,6 +147,12 @@ public:
     std::vector<float> min_peaks, max_peaks;
     std::string name;
     float duration_s{};
+
+    // Local-params write-back: when set, the UI writes these values to the
+    // ports' document values through the same `set` hooks the gestures use,
+    // so the inspector and the widgets reflect the restored file params.
+    bool has_params{false};
+    ParamSnapshot params{};
   };
   struct ui_to_processor
   {
@@ -154,6 +166,38 @@ public:
   bool ui_refresh{true};
   std::string ui_sound_name;
   int64_t ui_sound_mtime{-1};
+
+  // --- Local-params state (see handle_local_params in GranolaModel.cpp)
+  std::map<std::string, ParamSnapshot> local_store; // RAM copy of current set
+  std::string local_file;        // file the current port values belong to
+  ParamSnapshot local_last{};    // last applied/captured snapshot
+  bool local_active{false};      // toggle state seen last tick
+  bool local_dirty{false};       // RAM store has edits not yet written
+  bool local_save_inflight{false};
+  long local_dirty_age{0};       // frames since last edit, for debounce
+  int64_t params_adopted_mtime{-1};
+  bool ui_send_params{false};    // attach params to the next UI message
+
+  ParamSnapshot param_snapshot() const noexcept
+  {
+    return ParamSnapshot{
+        inputs.pos,   inputs.dur,   inputs.pos_j,          inputs.pos_j_r,
+        inputs.dur_j, inputs.dur_j_r, inputs.win_coefs.value.x,
+        inputs.win_coefs.value.y};
+  }
+
+  void apply_params(const ParamSnapshot& p) noexcept
+  {
+    inputs.pos.value = p.pos;
+    inputs.dur.value = p.dur;
+    inputs.pos_j.value = p.pos_j;
+    inputs.pos_j_r.value = p.pos_j_r;
+    inputs.dur_j.value = p.dur_j;
+    inputs.dur_j_r.value = p.dur_j_r;
+    inputs.win_coefs.value = {p.win_x, p.win_y};
+  }
+
+  void handle_local_params(std::string_view cur_name, bool have_bank_sound);
 
   struct MidiVoice
   {
@@ -190,8 +234,12 @@ public:
   {
     std::string folder;
     std::string map_file;
+    std::string params_set;
     double rate;
     SoundBank previous;
+    // Pending local-params save (whole current set), written to
+    // granola-params.json before scanning so the fresh bank loads it back.
+    std::shared_ptr<const std::map<std::string, ParamSnapshot>> save;
   };
 
   struct worker_t
@@ -200,10 +248,19 @@ public:
 
     static std::function<void(Granola&)> work(std::shared_ptr<scan_request> rq)
     {
-      auto bank = scan_folder(rq->folder, rq->map_file, rq->rate, rq->previous);
-      return [bank = std::move(bank)](Granola& self) mutable {
+      const bool had_save = bool(rq->save);
+      const bool saved = had_save && write_params(rq->folder, rq->params_set, *rq->save);
+      auto bank = scan_folder(
+          rq->folder, rq->map_file, rq->params_set, rq->rate, rq->previous);
+      return [bank = std::move(bank), had_save, saved](Granola& self) mutable {
         self.bank = std::move(bank);
         self.bank_scan_inflight = false;
+        if(had_save)
+        {
+          self.local_save_inflight = false;
+          if(!saved) // e.g. read-only folder: retry on a later rescan
+            self.local_dirty = true;
+        }
       };
     }
   } worker;

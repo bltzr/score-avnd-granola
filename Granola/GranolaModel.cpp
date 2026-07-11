@@ -27,9 +27,78 @@ void Granola::request_scan()
   auto rq = std::make_shared<scan_request>();
   rq->folder = inputs.sound_folder.value;
   rq->map_file = inputs.midi_map.value;
+  rq->params_set = inputs.params_set.value;
   rq->rate = samplerate;
   rq->previous = bank;
+
+  // Debounced local-params save, riding the ~2x/s rescan cycle: only attach
+  // once edits have settled for ~300ms.
+  if(local_dirty && !local_save_inflight
+     && local_dirty_age >= (long)(samplerate * 0.3))
+  {
+    rq->save = std::make_shared<const std::map<std::string, ParamSnapshot>>(
+        local_store);
+    local_dirty = false;
+    local_save_inflight = true;
+  }
+
   worker.request(std::move(rq));
+}
+
+// Local-params mode. RAM (local_store) is authoritative for the current set;
+// the disk file is adopted on set change or external edits, never while our
+// own unsaved edits are pending. Values are applied to the processor's own
+// inputs immediately (audio stays correct with no panel open) and flagged for
+// write-back to the ports' document values through the UI bus.
+void Granola::handle_local_params(std::string_view cur_name, bool have_bank_sound)
+{
+  if(!inputs.local_params || !have_bank_sound)
+  {
+    local_active = false;
+    return;
+  }
+
+  const auto& wanted_set
+      = inputs.params_set.value.empty() ? "default" : inputs.params_set.value;
+  if(bank.params_set == wanted_set && !local_dirty && !local_save_inflight
+     && bank.params_mtime != params_adopted_mtime)
+  {
+    local_store = bank.params;
+    params_adopted_mtime = bank.params_mtime;
+    // Re-apply only when the adopted values actually differ (adopting our own
+    // save back would otherwise cause a redundant apply every round-trip)
+    if(auto it = local_store.find(local_file);
+       it == local_store.end() || !(it->second == local_last))
+      local_file.clear();
+  }
+
+  if(local_file != cur_name || !local_active)
+  {
+    // File switch (or mode just enabled): restore the file's stored values;
+    // a file never seen in this set starts from the current port values.
+    if(auto it = local_store.find(std::string(cur_name)); it != local_store.end())
+    {
+      apply_params(it->second);
+      ui_send_params = true;
+    }
+    else
+    {
+      local_store.emplace(std::string(cur_name), param_snapshot());
+      local_dirty = true;
+      local_dirty_age = 0;
+    }
+    local_file = cur_name;
+    local_last = param_snapshot();
+  }
+  else if(auto snap = param_snapshot(); snap != local_last)
+  {
+    // Edits (inspector, waveform gestures, automation) update the store
+    local_last = snap;
+    local_store[local_file] = snap;
+    local_dirty = true;
+    local_dirty_age = 0;
+  }
+  local_active = true;
 }
 
 void Granola::resize(int n)
@@ -51,10 +120,15 @@ void Granola::operator()(tick t)
   using namespace std;
 
   // Periodic folder rescan (worker thread; ~2x/second), immediate on
-  // folder/map path change.
+  // folder/map/params-set change.
+  if(local_dirty)
+    local_dirty_age += t.frames;
   bank_scan_phase += t.frames;
+  const auto& wanted_set
+      = inputs.params_set.value.empty() ? "default" : inputs.params_set.value;
   const bool paths_changed = bank.folder != inputs.sound_folder.value
-                             || bank.map_file != inputs.midi_map.value;
+                             || bank.map_file != inputs.midi_map.value
+                             || bank.params_set != wanted_set;
   if(paths_changed || bank_scan_phase >= (long)(samplerate / 2))
   {
     bank_scan_phase = 0;
@@ -88,11 +162,17 @@ void Granola::operator()(tick t)
   if(outputs.current_sound.value != cur_name)
     outputs.current_sound.value = std::string(cur_name);
 
+  // Local-params mode: restore/capture per-file values for the index-picked
+  // sound. Runs before the UI message so restored values ship with it.
+  handle_local_params(cur_name, cur_bank_snd != nullptr);
+
   // Waveform UI: send the envelope of the index-picked sound when it changes
-  // (name or on-disk content), or when a (re)created UI asks for a refresh.
+  // (name or on-disk content), when a (re)created UI asks for a refresh, or
+  // when restored local params must be written back to the ports.
   const int64_t cur_mtime = cur_bank_snd ? cur_bank_snd->mtime : 0;
   if(send_message
-     && (ui_refresh || ui_sound_name != cur_name || ui_sound_mtime != cur_mtime))
+     && (ui_refresh || ui_send_params || ui_sound_name != cur_name
+         || ui_sound_mtime != cur_mtime))
   {
     processor_to_ui msg;
     msg.name = cur_name;
@@ -102,8 +182,14 @@ void Granola::operator()(tick t)
       msg.max_peaks = cur_bank_snd->max_peaks;
       msg.duration_s = cur_bank_snd->duration_s;
     }
+    if(ui_send_params)
+    {
+      msg.has_params = true;
+      msg.params = local_last;
+    }
     send_message(std::move(msg));
     ui_refresh = false;
+    ui_send_params = false;
     ui_sound_name = cur_name;
     ui_sound_mtime = cur_mtime;
   }

@@ -24,13 +24,30 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSaveFile>
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace Granola
 {
+
+// Per-file parameter snapshot for the local-params mode (Task 3): the values
+// stored/restored per sound when "Local params" is on. Persisted in the
+// folder-level granola-params.json as { "<set>": { "<file>": {...} } }.
+struct ParamSnapshot
+{
+  float pos{1e-8f}, dur{0.1f};
+  float pos_j{0.f}, pos_j_r{1.f};
+  float dur_j{0.f}, dur_j_r{1.f};
+  float win_x{0.f}, win_y{0.f};
+
+  bool operator==(const ParamSnapshot&) const noexcept = default;
+};
+
+static constexpr auto params_file_name = "granola-params.json";
 
 struct BankSound
 {
@@ -99,6 +116,11 @@ struct SoundBank
   int64_t map_mtime{};
   std::vector<MidiZone> zones;
 
+  // Local-params store loaded from granola-params.json for one named set
+  std::string params_set;
+  int64_t params_mtime{};
+  std::map<std::string, ParamSnapshot> params;
+
   int index_of(std::string_view name) const noexcept
   {
     for(std::size_t i = 0; i < sounds.size(); i++)
@@ -118,12 +140,13 @@ struct SoundBank
 
 // Runs in the worker thread.
 inline SoundBank scan_folder(
-    const std::string& folder, const std::string& map_file, double rate,
-    const SoundBank& previous)
+    const std::string& folder, const std::string& map_file,
+    const std::string& params_set, double rate, const SoundBank& previous)
 {
   SoundBank out;
   out.folder = folder;
   out.map_file = map_file;
+  out.params_set = params_set.empty() ? "default" : params_set;
   if(folder.empty())
     return out;
 
@@ -208,7 +231,72 @@ inline SoundBank scan_folder(
     }
   }
 
+  // Local params: load the selected named set from granola-params.json
+  {
+    const auto ppath = dir.filePath(params_file_name);
+    if(QFileInfo pi(ppath); pi.exists())
+    {
+      out.params_mtime = pi.lastModified().toMSecsSinceEpoch();
+      if(QFile f(ppath); f.open(QIODevice::ReadOnly))
+      {
+        const auto so = QJsonDocument::fromJson(f.readAll())
+                            .object()[QString::fromStdString(out.params_set)]
+                            .toObject();
+        for(auto it = so.begin(); it != so.end(); ++it)
+        {
+          const auto o = it.value().toObject();
+          ParamSnapshot p;
+          p.pos = o["pos"].toDouble(p.pos);
+          p.dur = o["dur"].toDouble(p.dur);
+          p.pos_j = o["pos_j"].toDouble(p.pos_j);
+          p.pos_j_r = o["pos_j_r"].toDouble(p.pos_j_r);
+          p.dur_j = o["dur_j"].toDouble(p.dur_j);
+          p.dur_j_r = o["dur_j_r"].toDouble(p.dur_j_r);
+          p.win_x = o["win_x"].toDouble(p.win_x);
+          p.win_y = o["win_y"].toDouble(p.win_y);
+          out.params.emplace(it.key().toStdString(), p);
+        }
+      }
+    }
+  }
+
   return out;
+}
+
+// Runs in the worker thread: read-modify-write of granola-params.json so
+// other named sets are preserved. Atomic via QSaveFile; the following rescan
+// picks up the new mtime and loads back exactly what was written.
+inline bool write_params(
+    const std::string& folder, const std::string& params_set,
+    const std::map<std::string, ParamSnapshot>& params)
+{
+  if(folder.empty())
+    return false;
+  QDir dir(QString::fromStdString(folder));
+  const auto path = dir.filePath(params_file_name);
+
+  QJsonObject root;
+  if(QFile f(path); f.open(QIODevice::ReadOnly))
+    root = QJsonDocument::fromJson(f.readAll()).object();
+
+  QJsonObject setobj;
+  for(const auto& [file, p] : params)
+  {
+    setobj[QString::fromStdString(file)] = QJsonObject{
+        {"pos", p.pos},           {"dur", p.dur},
+        {"pos_j", p.pos_j},       {"pos_j_r", p.pos_j_r},
+        {"dur_j", p.dur_j},       {"dur_j_r", p.dur_j_r},
+        {"win_x", p.win_x},       {"win_y", p.win_y},
+    };
+  }
+  root[QString::fromStdString(params_set.empty() ? "default" : params_set)]
+      = setobj;
+
+  QSaveFile out(path);
+  if(!out.open(QIODevice::WriteOnly))
+    return false;
+  out.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+  return out.commit();
 }
 
 }
