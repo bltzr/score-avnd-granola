@@ -10,6 +10,7 @@
 #include <halp/audio.hpp>
 #include <halp/controls.hpp>
 #include <halp/mappers.hpp>
+#include <halp/file_port.hpp>
 #include <halp/meta.hpp>
 #include <halp/midi.hpp>
 #include <halp/sample_accurate_controls.hpp>
@@ -113,7 +114,7 @@ public:
 
     // --- Sound bank (multifile). New ports are appended at the end so saved
     // scenarios keep their existing port ids.
-    halp::lineedit<"Sound folder", ""> sound_folder;
+    halp::folder_port<"Sound folder"> sound_folder;
     struct : halp::spinbox_i32<"Sound index", halp::range{0, 127, 0}>
     {
     } sound_index;
