@@ -46,34 +46,48 @@ struct BankSound
   }
 };
 
+// Downsampled min/max envelope over all channels. Used by the waveform UI.
+inline void compute_peaks_raw(
+    const float* const* data, int channels, int64_t frames, double rate,
+    std::vector<float>& min_peaks, std::vector<float>& max_peaks, float& duration_s)
+{
+  min_peaks.clear();
+  max_peaks.clear();
+  duration_s = 0.f;
+  if(!data || channels <= 0 || frames <= 0 || rate <= 0)
+    return;
+  duration_s = float(frames / rate);
+
+  const std::size_t buckets = std::min<std::size_t>(1024, (std::size_t)frames);
+  min_peaks.assign(buckets, 0.f);
+  max_peaks.assign(buckets, 0.f);
+  for(std::size_t b = 0; b < buckets; b++)
+  {
+    const std::size_t begin = b * frames / buckets;
+    const std::size_t end = std::max(begin + 1, (b + 1) * (std::size_t)frames / buckets);
+    float lo = std::numeric_limits<float>::max();
+    float hi = std::numeric_limits<float>::lowest();
+    for(int c = 0; c < channels; c++)
+      for(std::size_t i = begin; i < end && i < (std::size_t)frames; i++)
+      {
+        lo = std::min(lo, data[c][i]);
+        hi = std::max(hi, data[c][i]);
+      }
+    if(lo > hi)
+      lo = hi = 0.f;
+    min_peaks[b] = lo;
+    max_peaks[b] = hi;
+  }
+}
+
 // Runs in the worker thread, right after decoding.
 inline void compute_peaks(BankSound& snd, double rate)
 {
   if(snd.data.empty() || snd.data[0].empty() || rate <= 0)
     return;
-  const std::size_t frames = snd.data[0].size();
-  snd.duration_s = float(frames / rate);
-
-  const std::size_t buckets = std::min<std::size_t>(1024, frames);
-  snd.min_peaks.assign(buckets, 0.f);
-  snd.max_peaks.assign(buckets, 0.f);
-  for(std::size_t b = 0; b < buckets; b++)
-  {
-    const std::size_t begin = b * frames / buckets;
-    const std::size_t end = std::max(begin + 1, (b + 1) * frames / buckets);
-    float lo = std::numeric_limits<float>::max();
-    float hi = std::numeric_limits<float>::lowest();
-    for(const auto& ch : snd.data)
-      for(std::size_t i = begin; i < end && i < ch.size(); i++)
-      {
-        lo = std::min(lo, ch[i]);
-        hi = std::max(hi, ch[i]);
-      }
-    if(lo > hi)
-      lo = hi = 0.f;
-    snd.min_peaks[b] = lo;
-    snd.max_peaks[b] = hi;
-  }
+  compute_peaks_raw(
+      snd.ptrs.data(), (int)snd.ptrs.size(), (int64_t)snd.data[0].size(), rate,
+      snd.min_peaks, snd.max_peaks, snd.duration_s);
 }
 
 struct SoundBank
