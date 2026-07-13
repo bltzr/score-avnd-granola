@@ -7,14 +7,12 @@
 #include <QMenu>
 
 #include <cfloat>
+#include <cstdio>
 
 namespace Granola
 {
 // Custom widget for the "Window coefs" XY port: paints the actual grain
-// window shape for the current coefficients. The port semantics stay
-// identical (an xy value); dragging maps x/y exactly like the standard pad.
-// The curve mirrors the (angle, amount) -> (a, b) mapping of the tick path
-// in GranolaModel.cpp and the per-mode math of GranuGrain::window().
+// window shape for the current coefficients. Dragging maps x/y like a pad.
 struct WindowShapeItem
 {
   static constexpr double width() { return 220.; }
@@ -34,7 +32,6 @@ struct WindowShapeItem
     constexpr double w = width(), h = height();
     constexpr int N = curve_points;
 
-    // Same mapping as the spawn path in GranolaModel.cpp
     const double angle = (1. - value.x) * PI / 2.;
     double a = 1. + value.y * Granola::wc_radius * std::cos(angle);
     double b = 1. + value.y * Granola::wc_radius * std::sin(angle);
@@ -102,14 +99,12 @@ struct WindowShapeItem
     ctx.draw_rounded_rect(0., 0., w, h, 3.);
     ctx.fill();
 
-    // Title floating in the (empty) top-left corner, to the right of the dot.
     ctx.begin_path();
     ctx.set_fill_color({255, 255, 255, 255});
     ctx.set_font_size(9.);
     ctx.draw_text(16., 12., "Window coefficients");
     ctx.fill();
 
-    // Filled shape, then the curve stroked on top (without the baseline)
     ctx.begin_path();
     ctx.move_to(pad, h - pad);
     for(int i = 0; i <= N; i++)
@@ -137,7 +132,6 @@ struct WindowShapeItem
     ctx.set_stroke_width(1.5);
     ctx.stroke();
 
-    // Marker showing the underlying xy value, as a drag affordance
     ctx.begin_path();
     ctx.draw_circle(
         pad + value.x * (w - 2. * pad), h - pad - value.y * (h - 2. * pad), 2.5);
@@ -151,7 +145,6 @@ struct WindowShapeItem
     mouse_move(x, y);
     return true;
   }
-
   void mouse_move(double x, double y)
   {
     halp::xy_type<float> v;
@@ -159,7 +152,6 @@ struct WindowShapeItem
     v.y = float(std::clamp(1. - (y - pad) / (height() - 2. * pad), 0., 1.));
     transaction.update(v);
   }
-
   void mouse_release(double x, double y)
   {
     mouse_move(x, y);
@@ -167,8 +159,7 @@ struct WindowShapeItem
   }
 };
 
-// Bound to the window_mode enum port; addon-local (uses the custom-item mouse
-// forwarding), so no score-side combobox change is needed.
+// Bound to the window_mode enum port; addon-local QMenu dropdown.
 struct WindowModeItem
 {
   static constexpr double width() { return 50.; }
@@ -185,7 +176,6 @@ struct WindowModeItem
     ctx.set_fill_color(halp::colors::background_darker);
     ctx.draw_rounded_rect(0., 0., width(), height(), 2.);
     ctx.fill();
-
     ctx.begin_path();
     ctx.set_fill_color({255, 255, 255, 255});
     ctx.set_font_size(11.);
@@ -210,6 +200,237 @@ struct WindowModeItem
   }
 };
 
+// A cable port shown as a small "label value" chip, carrying the port's value
+// (synced) and a set hook. The pos/dur/jitter ports use this: the waveform
+// gestures are the editor, this shows the current number and feeds the widget.
+template <typename T>
+struct PortDotValue
+{
+  static constexpr double width() { return 88.; }
+  static constexpr double height() { return 16.; }
+
+  std::string_view label;
+  T value{};
+  std::function<void(T)> set;
+
+  void paint(auto ctx)
+  {
+    char buf[64];
+    if constexpr(std::is_floating_point_v<T>)
+      std::snprintf(buf, sizeof(buf), "%.*s %.3f", (int)label.size(), label.data(),
+                    (double)value);
+    else
+      std::snprintf(buf, sizeof(buf), "%.*s", (int)label.size(), label.data());
+    ctx.begin_path();
+    ctx.set_fill_color(halp::colors::mid);
+    ctx.set_font_size(8.);
+    ctx.draw_text(2., 11., buf);
+    ctx.fill();
+  }
+};
+
+// Waveform display + direct-manipulation gestures for the current sound.
+// Peaks arrive from the processor over the message bus; the position/duration
+// window overlay (and jitter bands) is synced from the ports in
+// ui::on_control_update. Gestures: horizontal drag = position; vertical drag =
+// duration in the window centre, position jitter at the start edge, duration
+// jitter at the end edge.
+struct WaveformItem
+{
+  static constexpr double width() { return 380.; }
+  static constexpr double height() { return 100.; }
+  static constexpr double pad = 2.;
+  static constexpr double left_pad = pad;
+
+  std::vector<float> min_peaks, max_peaks;
+  std::string name;
+  float duration_s{};
+
+  // control values, synced in ui::on_control_update
+  float pos{}, pos_j{}, dur{}, dur_j{};
+
+  std::function<void()> update;
+  // wired in ui::bus::init to the pos/dur/jitter ports' document values
+  std::function<void(float)> set_pos, set_dur, set_pos_j, set_dur_j;
+
+  static constexpr double draw_w() { return width() - left_pad - pad; }
+  double win_x0() const
+  {
+    return left_pad + std::clamp(double(pos), 0., 1.) * draw_w();
+  }
+  double win_x1() const
+  {
+    const double wdur = (dur <= 0.f || dur >= 1.f)
+                            ? 1.
+                            : std::min(double(pos) + double(dur), 1.) - double(pos);
+    return std::min(win_x0() + wdur * draw_w(), width() - pad);
+  }
+
+  void paint(auto ctx)
+  {
+    constexpr double w = width(), h = height();
+    const double mid = h / 2.;
+    const double yscale = (h / 2.) - pad;
+
+    // Inset by pad to match score::GraphicsLayout's own background rect.
+    ctx.begin_path();
+    ctx.set_fill_color(halp::colors::background_darker);
+    ctx.draw_rounded_rect(pad, pad, w - 2. * pad, h - 2. * pad, 3.);
+    ctx.fill();
+
+    if(!min_peaks.empty() && min_peaks.size() == max_peaks.size())
+    {
+      const std::size_t N = min_peaks.size();
+      const double dx = draw_w() / N;
+      ctx.begin_path();
+      ctx.move_to(left_pad, mid - max_peaks[0] * yscale);
+      for(std::size_t i = 1; i < N; i++)
+        ctx.line_to(left_pad + i * dx, mid - max_peaks[i] * yscale);
+      for(std::size_t i = N; i-- > 0;)
+        ctx.line_to(left_pad + i * dx, mid - min_peaks[i] * yscale);
+      ctx.close_path();
+      auto env = ctx.to_rgba(halp::colors::runtime_value_dark);
+      env.a = 180;
+      ctx.set_fill_color(env);
+      ctx.fill();
+      ctx.set_stroke_color(halp::colors::runtime_value_mid);
+      ctx.set_stroke_width(1.);
+      ctx.stroke();
+
+      const double x0 = win_x0();
+      const double x1 = win_x1();
+      ctx.begin_path();
+      ctx.draw_rect(x0, pad, x1 - x0, h - 2. * pad);
+      auto win = ctx.to_rgba(halp::colors::editable_value_mid);
+      win.a = 60;
+      ctx.set_fill_color(win);
+      ctx.fill();
+      ctx.begin_path();
+      ctx.draw_line(x0, pad, x0, h - pad);
+      ctx.draw_line(x1, pad, x1, h - pad);
+      ctx.set_stroke_color(halp::colors::editable_value_light);
+      ctx.set_stroke_width(1.);
+      ctx.stroke();
+
+      // jitter bands: position (±, symmetric) at the start edge; duration
+      // (add-only, one-sided) extending right from the end edge. Bands assume
+      // a jitter range of 1 (the audio uses the real *Jitter Range* ports).
+      auto band = ctx.to_rgba(halp::colors::editable_value_light);
+      band.a = 40;
+      const double pj = pos_j / 2. * draw_w();
+      if(pj > 0.5)
+      {
+        ctx.begin_path();
+        ctx.draw_rect(x0 - pj, pad, 2. * pj, h - 2. * pad);
+        ctx.set_fill_color(band);
+        ctx.fill();
+      }
+      const double dj = dur_j / 2. * draw_w();
+      if(dj > 0.5)
+      {
+        ctx.begin_path();
+        ctx.draw_rect(x1, pad, dj, h - 2. * pad);
+        ctx.set_fill_color(band);
+        ctx.fill();
+      }
+    }
+
+    char label[256];
+    if(!name.empty() && duration_s > 0.f)
+      std::snprintf(label, sizeof(label), "%s  (%.2f s)", name.c_str(), duration_s);
+    else if(!name.empty())
+      std::snprintf(label, sizeof(label), "%s", name.c_str());
+    else
+      std::snprintf(label, sizeof(label), "load a sound above");
+    ctx.begin_path();
+    ctx.set_fill_color(halp::colors::lighter);
+    ctx.set_font_size(9.);
+    ctx.draw_text(left_pad + 3., pad + 12., label);
+    ctx.fill();
+  }
+
+  enum class drag_zone
+  {
+    none,
+    window,     // vertical -> duration
+    start_edge, // vertical -> position jitter
+    end_edge    // vertical -> duration jitter
+  };
+  drag_zone m_zone{drag_zone::none};
+  double m_press_x{}, m_press_y{};
+  float m_pos0{}, m_dur0{}, m_pos_j0{}, m_dur_j0{};
+  bool m_dragging{false};
+
+  bool mouse_press(double x, double y)
+  {
+    if(min_peaks.empty())
+      return false; // no sound: nothing to manipulate
+
+    m_press_x = x;
+    m_press_y = y;
+    m_pos0 = pos;
+    m_dur0 = dur;
+    m_pos_j0 = pos_j;
+    m_dur_j0 = dur_j;
+
+    constexpr double edge = 10.;
+    const double x0 = win_x0(), x1 = win_x1();
+    if((x1 - x0) < 3. * edge)
+    {
+      m_zone = (x >= x0 - edge && x <= x1 + edge) ? drag_zone::window
+                                                  : drag_zone::none;
+    }
+    else if(std::abs(x - x0) <= edge)
+      m_zone = drag_zone::start_edge;
+    else if(std::abs(x - x1) <= edge)
+      m_zone = drag_zone::end_edge;
+    else if(x > x0 && x < x1)
+      m_zone = drag_zone::window;
+    else
+      m_zone = drag_zone::none;
+    m_dragging = true;
+    return true;
+  }
+
+  void mouse_move(double x, double y)
+  {
+    if(!m_dragging)
+      return;
+    const float dxn = float((x - m_press_x) / draw_w());
+    const float dyn = float((m_press_y - y) / (height() - 2. * pad));
+    float new_pos = m_pos0 + dxn;
+    switch(m_zone)
+    {
+      case drag_zone::window: {
+        const float new_dur = std::clamp(m_dur0 + dyn, 0.01f, 1.f);
+        new_pos -= (new_dur - m_dur0) / 2.f;
+        if(set_dur)
+          set_dur(new_dur);
+        break;
+      }
+      case drag_zone::start_edge:
+        if(set_pos_j)
+          set_pos_j(std::clamp(m_pos_j0 + dyn, 0.f, 1.f));
+        break;
+      case drag_zone::end_edge:
+        if(set_dur_j)
+          set_dur_j(std::clamp(m_dur_j0 + dyn, 0.f, 1.f));
+        break;
+      default:
+        break;
+    }
+    if(set_pos)
+      set_pos(std::clamp(new_pos, 1e-8f, 1.f));
+  }
+
+  void mouse_release(double x, double y)
+  {
+    mouse_move(x, y);
+    m_dragging = false;
+    m_zone = drag_zone::none;
+  }
+};
+
 struct Granola::ui
 {
   using enum halp::colors;
@@ -219,8 +440,29 @@ struct Granola::ui
   halp_meta(layout, vbox)
   halp_meta(background, background_darker)
   halp::label title{"Granulator"};
-  halp::item<&ins::sound> sound;
-  //halp::item<&ins::sound> win; not supported yet
+  halp::item<&ins::sound> sound; // soundfile chooser: loads the file/folder
+
+  // Position / duration / their jitters as value+set chips, driven by the
+  // waveform gestures (and editable in the inspector).
+  struct
+  {
+    halp_meta(name, "Ports")
+    halp_meta(layout, hbox)
+    halp_meta(background, background_dark)
+    halp::custom_control<PortDotValue<float>, &ins::pos> position{{.label = "pos"}};
+    halp::custom_control<PortDotValue<float>, &ins::pos_j> pos_jit{{.label = "posjit"}};
+    halp::custom_control<PortDotValue<float>, &ins::dur> duration{{.label = "dur"}};
+    halp::custom_control<PortDotValue<float>, &ins::dur_j> dur_jit{{.label = "durjit"}};
+  } ports;
+
+  struct
+  {
+    halp_meta(name, "Wave")
+    halp_meta(layout, hbox)
+    halp_meta(background, background_darker)
+    halp::custom_actions_item<WaveformItem> waveform;
+  } wave_box;
+
   struct
   {
     halp_meta(name, "Controls")
@@ -228,7 +470,7 @@ struct Granola::ui
     halp_meta(background, background_dark)
     struct
     {
-      halp_meta(name, "Controls")
+      halp_meta(name, "Params")
       halp_meta(layout, vbox)
       halp_meta(background, background_dark)
       struct
@@ -264,7 +506,7 @@ struct Granola::ui
       } rate_box;
       struct
       {
-        halp_meta(name, "Pitch_extra")
+        halp_meta(name, "Play")
         halp_meta(layout, hbox)
         halp_meta(background, background_dark)
         halp::item<&ins::playing> playing;
@@ -273,33 +515,14 @@ struct Granola::ui
     } params_box;
     struct
     {
-      halp_meta(name, "Controls")
+      halp_meta(name, "Shape")
       halp_meta(layout, vbox)
       halp_meta(background, background_dark)
-      struct
-      {
-        halp_meta(name, "Position Controls")
-        halp_meta(layout, hbox)
-        halp_meta(background, background_dark)
-        halp::item<&ins::pos> pos;
-        halp::item<&ins::pos_j> pos_j;
-      } pos_box;
-      struct
-      {
-        halp_meta(name, "Duration Controls")
-        halp_meta(layout, hbox)
-        halp_meta(background, background_dark)
-        halp::item<&ins::dur> dur;
-        halp::item<&ins::dur_j> dur_j;
-      } dur_box;
-      // Window-mode selector above the live window-shape display.
       halp::custom_control<WindowModeItem, &ins::window_mode> window_mode;
       halp::custom_control<WindowShapeItem, &ins::win_coefs> win_coefs;
     } shape_box;
   } controls;
 
-  // Called by score whenever a synced control value changes (and once after
-  // the layout is built): keep the shape widget's mode in sync with the port.
   void on_control_update()
   {
     auto& sb = controls.shape_box;
@@ -308,11 +531,56 @@ struct Granola::ui
       sb.win_coefs.update();
     if(sb.window_mode.update)
       sb.window_mode.update();
+
+    auto& wf = wave_box.waveform;
+    wf.pos = ports.position.value;
+    wf.pos_j = ports.pos_jit.value;
+    wf.dur = ports.duration.value;
+    wf.dur_j = ports.dur_jit.value;
+    if(wf.update)
+      wf.update();
   }
 
-  //halp::item<&ins::interp_type> interp_type;
-  //halp::item<&ins::loopmode> loopmode;
-  //halp::item<&ins::src_channels> src_channels;
-  //halp::item<&ins::channel_offset> channel_offset;
+  struct bus
+  {
+    // ui -> processor
+    std::function<void(ui_to_processor)> send_message;
+    void init(ui& self)
+    {
+      // Wire the waveform gestures to the ports' document values. The chip
+      // items' `set` hooks are filled by the layout builder (after init).
+      auto& wf = self.wave_box.waveform;
+      wf.set_pos = [&self](float v) {
+        if(auto& c = self.ports.position; c.set)
+          c.set(v);
+      };
+      wf.set_pos_j = [&self](float v) {
+        if(auto& c = self.ports.pos_jit; c.set)
+          c.set(v);
+      };
+      wf.set_dur = [&self](float v) {
+        if(auto& c = self.ports.duration; c.set)
+          c.set(v);
+      };
+      wf.set_dur_j = [&self](float v) {
+        if(auto& c = self.ports.dur_jit; c.set)
+          c.set(v);
+      };
+      // A late-created panel asks the processor to resend the envelope.
+      send_message(ui_to_processor{});
+    }
+
+    // processor -> ui
+    static void process_message(ui& self, processor_to_ui msg)
+    {
+      auto& wf = self.wave_box.waveform;
+      wf.min_peaks = std::move(msg.min_peaks);
+      wf.max_peaks = std::move(msg.max_peaks);
+      wf.name = std::move(msg.name);
+      wf.duration_s = msg.duration_s;
+      if(wf.update)
+        wf.update();
+    }
+  };
 };
 }
