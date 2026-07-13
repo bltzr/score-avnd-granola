@@ -257,6 +257,34 @@ struct WaveformItem
   // wired in ui::bus::init to the pos/dur/jitter ports' document values
   std::function<void(float)> set_pos, set_dur, set_pos_j, set_dur_j;
 
+  // Mono edit-mode display: the Sound file's path (from the sound chip, synced
+  // in on_control_update). When it changes, decode UI-side so the waveform
+  // shows before playback; during execution the processor's bus peaks arrive.
+  std::string sound_path, m_loaded_path;
+  void reload_from_path()
+  {
+    if(sound_path == m_loaded_path)
+      return;
+    m_loaded_path = sound_path;
+    const QFileInfo fi(QString::fromStdString(sound_path));
+    if(sound_path.empty() || !fi.isFile())
+      return; // a folder or nothing: leave the bus-supplied peaks in place
+    if(auto dec
+       = Media::AudioDecoder::decode_synchronous(fi.absoluteFilePath(), 44100))
+    {
+      auto& d = dec->second;
+      std::vector<const float*> ptrs;
+      for(auto& ch : d)
+        ptrs.push_back(ch.data());
+      compute_peaks_raw(
+          ptrs.data(), (int)ptrs.size(), (int64_t)(d.empty() ? 0 : d[0].size()),
+          44100., min_peaks, max_peaks, duration_s);
+      name = fi.fileName().toStdString();
+      if(update)
+        update();
+    }
+  }
+
   static constexpr double draw_w() { return width() - left_pad - pad; }
   double win_x0() const
   {
@@ -546,6 +574,8 @@ struct Granola::ui
     wf.pos_j = ports.pos_jit.value;
     wf.dur = ports.duration.value;
     wf.dur_j = ports.dur_jit.value;
+    wf.sound_path = ports.sound.value; // mono edit-mode display
+    wf.reload_from_path();
     if(wf.update)
       wf.update();
   }
