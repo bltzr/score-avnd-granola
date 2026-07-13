@@ -475,21 +475,35 @@ struct Granola::ui
 
   // The Sound port and pos/dur/their jitters as dot+label chips. The soundfile
   // chooser stays in the inspector (load there); the panel just shows the dot.
+  // Two rows so the (wide) labelled chips don't blow up the panel width:
+  // position row (sound + position + its deviation), then the duration row.
   struct
   {
     halp_meta(name, "Ports")
-    halp_meta(layout, hbox)
+    halp_meta(layout, vbox)
     halp_meta(background, background_dark)
-    halp::custom_control<PortDotValue<std::string>, &ins::sound> sound{
-        {.label = "sound"}};
-    halp::custom_control<PortDotValue<float>, &ins::pos> position{
-        {.label = "position"}};
-    halp::custom_control<PortDotValue<float>, &ins::pos_j> pos_jit{
-        {.label = "+/-deviation"}};
-    halp::custom_control<PortDotValue<float>, &ins::dur> duration{
-        {.label = "duration"}};
-    halp::custom_control<PortDotValue<float>, &ins::dur_j> dur_jit{
-        {.label = "duration +/-deviation"}};
+    struct
+    {
+      halp_meta(name, "PosRow")
+      halp_meta(layout, hbox)
+      halp_meta(background, background_dark)
+      halp::custom_control<PortDotValue<std::string>, &ins::sound> sound{
+          {.label = "sound"}};
+      halp::custom_control<PortDotValue<float>, &ins::pos> position{
+          {.label = "position"}};
+      halp::custom_control<PortDotValue<float>, &ins::pos_j> pos_jit{
+          {.label = "+/-deviation"}};
+    } pos_row;
+    struct
+    {
+      halp_meta(name, "DurRow")
+      halp_meta(layout, hbox)
+      halp_meta(background, background_dark)
+      halp::custom_control<PortDotValue<float>, &ins::dur> duration{
+          {.label = "duration"}};
+      halp::custom_control<PortDotValue<float>, &ins::dur_j> dur_jit{
+          {.label = "duration +/-deviation"}};
+    } dur_row;
   } ports;
 
   struct
@@ -570,11 +584,11 @@ struct Granola::ui
       sb.window_mode.update();
 
     auto& wf = wave_box.waveform;
-    wf.pos = ports.position.value;
-    wf.pos_j = ports.pos_jit.value;
-    wf.dur = ports.duration.value;
-    wf.dur_j = ports.dur_jit.value;
-    wf.sound_path = ports.sound.value; // mono edit-mode display
+    wf.pos = ports.pos_row.position.value;
+    wf.pos_j = ports.pos_row.pos_jit.value;
+    wf.dur = ports.dur_row.duration.value;
+    wf.dur_j = ports.dur_row.dur_jit.value;
+    wf.sound_path = ports.pos_row.sound.value; // mono edit-mode display
     wf.reload_from_path();
     if(wf.update)
       wf.update();
@@ -590,19 +604,19 @@ struct Granola::ui
       // items' `set` hooks are filled by the layout builder (after init).
       auto& wf = self.wave_box.waveform;
       wf.set_pos = [&self](float v) {
-        if(auto& c = self.ports.position; c.set)
+        if(auto& c = self.ports.pos_row.position; c.set)
           c.set(v);
       };
       wf.set_pos_j = [&self](float v) {
-        if(auto& c = self.ports.pos_jit; c.set)
+        if(auto& c = self.ports.pos_row.pos_jit; c.set)
           c.set(v);
       };
       wf.set_dur = [&self](float v) {
-        if(auto& c = self.ports.duration; c.set)
+        if(auto& c = self.ports.dur_row.duration; c.set)
           c.set(v);
       };
       wf.set_dur_j = [&self](float v) {
-        if(auto& c = self.ports.dur_jit; c.set)
+        if(auto& c = self.ports.dur_row.dur_jit; c.set)
           c.set(v);
       };
       // A late-created panel asks the processor to resend the envelope.
