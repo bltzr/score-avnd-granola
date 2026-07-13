@@ -3,7 +3,10 @@
 #include <halp/custom_widgets.hpp>
 #include <halp/layout.hpp>
 
+#include <Media/AudioDecoder.hpp>
+
 #include <QCursor>
+#include <QFileInfo>
 #include <QMenu>
 
 #include <cfloat>
@@ -206,7 +209,7 @@ struct WindowModeItem
 template <typename T>
 struct PortDotValue
 {
-  static constexpr double width() { return 88.; }
+  static constexpr double width() { return 132.; }
   static constexpr double height() { return 16.; }
 
   std::string_view label;
@@ -216,9 +219,10 @@ struct PortDotValue
   void paint(auto ctx)
   {
     char buf[64];
+    // Float ports are 0..1 normalized -> show as a rounded percentage.
     if constexpr(std::is_floating_point_v<T>)
-      std::snprintf(buf, sizeof(buf), "%.*s %.3f", (int)label.size(), label.data(),
-                    (double)value);
+      std::snprintf(buf, sizeof(buf), "%.*s %.0f%%", (int)label.size(), label.data(),
+                    (double)value * 100.);
     else
       std::snprintf(buf, sizeof(buf), "%.*s", (int)label.size(), label.data());
     ctx.begin_path();
@@ -450,10 +454,14 @@ struct Granola::ui
     halp_meta(background, background_dark)
     halp::custom_control<PortDotValue<std::string>, &ins::sound> sound{
         {.label = "sound"}};
-    halp::custom_control<PortDotValue<float>, &ins::pos> position{{.label = "pos"}};
-    halp::custom_control<PortDotValue<float>, &ins::pos_j> pos_jit{{.label = "posjit"}};
-    halp::custom_control<PortDotValue<float>, &ins::dur> duration{{.label = "dur"}};
-    halp::custom_control<PortDotValue<float>, &ins::dur_j> dur_jit{{.label = "durjit"}};
+    halp::custom_control<PortDotValue<float>, &ins::pos> position{
+        {.label = "position"}};
+    halp::custom_control<PortDotValue<float>, &ins::pos_j> pos_jit{
+        {.label = "+/-deviation"}};
+    halp::custom_control<PortDotValue<float>, &ins::dur> duration{
+        {.label = "duration"}};
+    halp::custom_control<PortDotValue<float>, &ins::dur_j> dur_jit{
+        {.label = "duration +/-deviation"}};
   } ports;
 
   struct
