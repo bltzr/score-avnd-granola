@@ -104,12 +104,6 @@ struct WindowShapeItem
     ctx.fill();
 
     ctx.begin_path();
-    ctx.set_fill_color({255, 255, 255, 255});
-    ctx.set_font_size(9.);
-    ctx.draw_text(16., 12., "Window coefficients");
-    ctx.fill();
-
-    ctx.begin_path();
     ctx.move_to(pad, h - pad);
     for(int i = 0; i <= N; i++)
     {
@@ -640,8 +634,16 @@ struct Granola::ui
         {.label = "± deviation"}};
   } ports;
 
-  // Sound-source row: the multi enable button, and (when multi is on) the file
-  // picker + random toggle.
+  struct
+  {
+    halp_meta(name, "Wave")
+    halp_meta(layout, hbox)
+    halp_meta(background, background_darker)
+    halp::custom_actions_item<WaveformItem> waveform;
+  } wave_box;
+
+  // Sound-source row (below the waveform): the multi enable button, and (when
+  // multi is on) the file picker + random toggle.
   struct
   {
     halp_meta(name, "Source")
@@ -651,14 +653,6 @@ struct Granola::ui
     halp::custom_control<SoundPickerItem, &ins::sound_index> picker;
     halp::custom_control<RandomToggle, &ins::random> random_tgl;
   } source_box;
-
-  struct
-  {
-    halp_meta(name, "Wave")
-    halp_meta(layout, hbox)
-    halp_meta(background, background_darker)
-    halp::custom_actions_item<WaveformItem> waveform;
-  } wave_box;
 
   struct
   {
@@ -692,14 +686,7 @@ struct Granola::ui
         halp_meta(layout, hbox)
         halp_meta(background, background_dark)
         halp::item<&ins::rate> rate;
-        struct
-        {
-          halp_meta(name, "Pitch_extra")
-          halp_meta(layout, vbox)
-          halp_meta(background, background_dark)
-          halp::item<&ins::rate_j> rate_j;
-          halp::item<&ins::reverse> reverse;
-        } pitch_xtra_box;
+        halp::item<&ins::rate_j> rate_j;
       } rate_box;
       struct
       {
@@ -715,7 +702,18 @@ struct Granola::ui
       halp_meta(name, "Shape")
       halp_meta(layout, vbox)
       halp_meta(background, background_dark)
-      halp::custom_control<WindowModeItem, &ins::window_mode> window_mode;
+      // Reverse to the left of the window-mode selector.
+      struct
+      {
+        halp_meta(name, "Win")
+        halp_meta(layout, hbox)
+        halp_meta(background, background_dark)
+        halp::item<&ins::reverse> reverse;
+        halp::custom_control<WindowModeItem, &ins::window_mode> window_mode;
+        halp::label wm_label{"win modes"};
+      } wm_box;
+      // Title above the window-shape widget (was drawn inside it).
+      halp::label wc_label{"Window coefficients"};
       halp::custom_control<WindowShapeItem, &ins::win_coefs> win_coefs;
     } shape_box;
   } controls;
@@ -723,11 +721,11 @@ struct Granola::ui
   void on_control_update()
   {
     auto& sb = controls.shape_box;
-    sb.win_coefs.mode = int(sb.window_mode.value);
+    sb.win_coefs.mode = int(sb.wm_box.window_mode.value);
     if(sb.win_coefs.update)
       sb.win_coefs.update();
-    if(sb.window_mode.update)
-      sb.window_mode.update();
+    if(sb.wm_box.window_mode.update)
+      sb.wm_box.window_mode.update();
 
     auto& wf = wave_box.waveform;
     wf.pos = ports.position.value;
