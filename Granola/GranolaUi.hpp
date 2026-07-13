@@ -520,7 +520,7 @@ struct MultiButton
       ctx.begin_path();
       ctx.set_fill_color({255, 255, 255, 255});
       ctx.set_font_size(9.);
-      ctx.draw_text(6., 14., "＋ multiple sound support");
+      ctx.draw_text(6., 14., "multiple sound support");
       ctx.fill();
     }
     else
