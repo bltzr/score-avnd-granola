@@ -469,9 +469,12 @@ struct WaveformItem
     const double mid = h / 2.;
     const double yscale = (h / 2.) - pad;
 
+    // Inset by pad to match score::GraphicsLayout's own background rect
+    // (adjusted(2,2,-2,-2), radius 3); drawing to the full bounds made the box
+    // protrude ~2px past the sibling rows on every side (the left "spill").
     ctx.begin_path();
     ctx.set_fill_color(halp::colors::background_darker);
-    ctx.draw_rounded_rect(0., 0., w, h, 3.);
+    ctx.draw_rounded_rect(pad, pad, w - 2. * pad, h - 2. * pad, 3.);
     ctx.fill();
 
     if(!min_peaks.empty() && min_peaks.size() == max_peaks.size())
