@@ -16,7 +16,8 @@ void Granola::prepare(setup info)
   grains.reserve(256);
   resize(inputs.num_voices);
 
-  request_scan();
+  if(inputs.multi)
+    request_scan();
 }
 
 void Granola::request_scan()
@@ -49,22 +50,33 @@ void Granola::operator()(tick t)
 {
   using namespace std;
 
-  // Periodic folder rescan (worker thread; ~2x/second), immediate on change.
-  bank_scan_phase += t.frames;
+  // A changed Sound-port file resets active grains: in mono mode a grain
+  // captured the previous (now-freed) buffer; the clear makes new grains
+  // capture the current one. (Bank grains hold their sound, but a file change
+  // also means a folder change, so the reset is harmless there too.)
   const std::string_view snd_path = inputs.sound.soundfile.filename;
-  if(bank.folder != snd_path || bank_scan_phase >= (long)(samplerate / 2))
+  if(snd_path != last_sound_path)
+  {
+    last_sound_path = snd_path;
+    clear();
+  }
+
+  // Folder rescan only in multifile mode (worker thread; ~2x/second), immediate
+  // when the folder changes. Mono mode never decodes the folder.
+  bank_scan_phase += t.frames;
+  if(inputs.multi
+     && (bank.folder != snd_path || bank_scan_phase >= (long)(samplerate / 2)))
   {
     bank_scan_phase = 0;
     request_scan();
   }
 
-  // Current sound: bank entry selected by Sound index (or per-grain random),
-  // falling back to the Sound port itself when the bank is empty (e.g. before
-  // the first scan completes, or a single file outside any scannable folder).
+  // Current sound: in multifile mode, the bank entry chosen by Sound index (or
+  // per-grain random); otherwise the single Sound-port file.
   GrainSource cur{};
   std::shared_ptr<const void> cur_hold{};
-  const bool random_pick = !bank.sounds.empty() && inputs.random;
-  if(!bank.sounds.empty())
+  const bool random_pick = inputs.multi && !bank.sounds.empty() && inputs.random;
+  if(inputs.multi && !bank.sounds.empty())
   {
     const int N = (int)bank.sounds.size();
     const int idx = random_pick ? 0 : CLAMP(inputs.sound_index.value, 0, N - 1);
