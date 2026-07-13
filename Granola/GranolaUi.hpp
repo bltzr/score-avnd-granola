@@ -103,6 +103,13 @@ struct WindowShapeItem
     ctx.draw_rounded_rect(0., 0., w, h, 3.);
     ctx.fill();
 
+    // Title floating in the (empty) top-left corner, to the right of the dot.
+    ctx.begin_path();
+    ctx.set_fill_color({255, 255, 255, 255});
+    ctx.set_font_size(9.);
+    ctx.draw_text(16., 12., "Window coefficients");
+    ctx.fill();
+
     ctx.begin_path();
     ctx.move_to(pad, h - pad);
     for(int i = 0; i <= N; i++)
@@ -495,7 +502,7 @@ struct WaveformItem
 // Bound to the multi toggle: the enable button (off) / mono affordance (on).
 struct MultiButton
 {
-  static constexpr double width() { return 150.; }
+  static constexpr double width() { return 110.; }
   static constexpr double height() { return 20.; }
 
   bool value{false}; // multi toggle
@@ -542,9 +549,10 @@ struct SoundPickerItem
   static constexpr double width() { return 160.; }
   static constexpr double height() { return 20.; }
 
-  std::string folder; // parent folder of the Sound path (synced)
-  int value{0};       // Sound index (synced)
-  bool multi{false};  // synced from the multi toggle
+  std::string folder;       // containing folder (from the bus)
+  std::string current_file; // current sound basename (from the bus)
+  int value{0};             // Sound index (synced)
+  bool multi{false};        // synced from the multi toggle
   bool m_prev_multi{false}; // to catch the multi off->on transition
   std::function<void(int)> set;
   std::function<void()> update;
@@ -742,8 +750,7 @@ struct Granola::ui
         halp::custom_control<WindowModeItem, &ins::window_mode> window_mode;
         halp::label wm_label{"win modes"};
       } wm_box;
-      // Title above the window-shape widget (was drawn inside it).
-      halp::label wc_label{"Window coefficients"};
+      // Its title is drawn inside the widget (top-left), like flucoma.
       halp::custom_control<WindowShapeItem, &ins::win_coefs> win_coefs;
     } shape_box;
   } controls;
@@ -770,31 +777,25 @@ struct Granola::ui
     // Sound-source row: the multi toggle gates the picker + random; the picker
     // lists the Sound path's parent folder.
     const bool m = source_box.multi_btn.value;
-    source_box.picker.multi = m;
+    auto& pk = source_box.picker;
+    pk.multi = m;
     source_box.random_tgl.multi = m;
-    const std::string& sp = ports.sound.value;
-    source_box.picker.folder
-        = sp.empty()
-              ? std::string{}
-              : QFileInfo(QString::fromStdString(sp)).absolutePath().toStdString();
-    // Enabling multi keeps the mono file selected: find it in the folder and
-    // set Sound index to it (instead of jumping to file 0).
-    if(m && !source_box.picker.m_prev_multi && !sp.empty())
+    // Folder + current file come from the bus (process_message). Enabling multi
+    // keeps the current file selected instead of jumping to index 0.
+    if(m && !pk.m_prev_multi && !pk.folder.empty())
     {
-      const auto files = source_box.picker.files();
-      const std::string base
-          = QFileInfo(QString::fromStdString(sp)).fileName().toStdString();
+      const auto files = pk.files();
       for(int i = 0; i < (int)files.size(); i++)
-        if(files[i] == base)
+        if(files[i] == pk.current_file)
         {
-          if(source_box.picker.set)
-            source_box.picker.set(i);
+          if(pk.set)
+            pk.set(i);
           break;
         }
     }
-    source_box.picker.m_prev_multi = m;
-    if(source_box.picker.update)
-      source_box.picker.update();
+    pk.m_prev_multi = m;
+    if(pk.update)
+      pk.update();
     if(source_box.random_tgl.update)
       source_box.random_tgl.update();
     if(source_box.multi_btn.update)
@@ -845,10 +846,18 @@ struct Granola::ui
       auto& wf = self.wave_box.waveform;
       wf.min_peaks = std::move(msg.min_peaks);
       wf.max_peaks = std::move(msg.max_peaks);
-      wf.name = std::move(msg.name);
+      wf.name = msg.name;
       wf.duration_s = msg.duration_s;
       if(wf.update)
         wf.update();
+
+      // The soundfile port's path isn't visible to the UI, so the picker takes
+      // its folder + current file from the processor here.
+      auto& pk = self.source_box.picker;
+      pk.folder = std::move(msg.folder);
+      pk.current_file = std::move(msg.name);
+      if(pk.update)
+        pk.update();
     }
   };
 };
