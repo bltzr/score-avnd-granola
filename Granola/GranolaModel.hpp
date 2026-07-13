@@ -52,7 +52,7 @@ public:
     halp::hslider_f32<"Position", halp::range{0.00000001, 1., 0.00000001}> pos;
     halp::hslider_f32<"Position Jitter", halp::range{0., 1., 0.}> pos_j;
     halp::knob_f32<"Position Jitter Range", halp::range{0., 1., 1.}> pos_j_r;
-    halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 0.1}> dur;
+    halp::hslider_f32<"Duration", halp::range{0.01, 1., 0.1}> dur;
     halp::hslider_f32<"Duration Jitter", halp::range{0., 1., 0.}> dur_j;
     halp::knob_f32<"Duration Jitter Range", halp::range{0., 1., 1.}> dur_j_r;
     struct : halp::knob_f32<"Pitch", halp::range{0.000001, 10., 1.}>
