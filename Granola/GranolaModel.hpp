@@ -35,6 +35,10 @@ public:
   halp_meta(c_name, "granola")
   halp_meta(uuid, "38F9684D-54A6-4F48-91E4-3B251F0956EA")
 
+  // Radius of the (angle, amount) -> (window a, b) mapping for the Window-coefs
+  // XY pad; shared with the window-shape widget in GranolaUi.hpp.
+  static constexpr float wc_radius{64.};
+
   //static const int NCHAN{8};
 
   struct ins
@@ -198,7 +202,6 @@ public:
   void operator()(tick t);
 
 private:
-  float wc_radius{64.};
   rnd::pcg rd;
 };
 
