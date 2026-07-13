@@ -313,8 +313,8 @@ struct WindowModeItem
 template <typename T>
 struct PortDotValue
 {
-  static constexpr double width() { return 50.; }
-  static constexpr double height() { return 14.; }
+  static constexpr double width() { return 88.; }
+  static constexpr double height() { return 16.; }
 
   std::string_view label;
   T value{};
@@ -322,10 +322,16 @@ struct PortDotValue
 
   void paint(auto ctx)
   {
+    char buf[64];
+    if constexpr(std::is_floating_point_v<T>)
+      std::snprintf(buf, sizeof(buf), "%.*s %.3f", (int)label.size(), label.data(),
+                    (double)value);
+    else
+      std::snprintf(buf, sizeof(buf), "%.*s", (int)label.size(), label.data());
     ctx.begin_path();
     ctx.set_fill_color(halp::colors::mid);
     ctx.set_font_size(8.);
-    ctx.draw_text(12., 10., label);
+    ctx.draw_text(2., 11., buf);
     ctx.fill();
   }
 };
