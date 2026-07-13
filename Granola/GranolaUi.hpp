@@ -764,8 +764,17 @@ struct Granola::ui
     const bool m = source_box.multi_btn.value;
     auto& pk = source_box.picker;
     pk.multi = m;
-    // Folder + current file come from the bus (process_message). Enabling multi
-    // keeps the current file selected instead of jumping to index 0.
+    // Edit-mode: derive the picker's folder + current file from the Sound path
+    // (score resolves it to an absolute path since the Layer.hpp fix); the bus
+    // keeps both precise during execution. Enabling multi keeps the current
+    // file selected instead of jumping to index 0.
+    if(const std::string& sp = ports.sound.value; !sp.empty())
+    {
+      const QFileInfo fi(QString::fromStdString(sp));
+      pk.folder = fi.absolutePath().toStdString();
+      if(pk.current_file.empty())
+        pk.current_file = fi.fileName().toStdString();
+    }
     if(m && !pk.m_prev_multi && !pk.folder.empty())
     {
       const auto files = pk.files();
