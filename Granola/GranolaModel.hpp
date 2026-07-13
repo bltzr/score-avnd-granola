@@ -1,11 +1,13 @@
 #pragma once
 
+#include "SoundBank.hpp"
 #include "grain.hpp"
 #include "utils.hpp"
 
 #include <QDebug>
 
 #include <atomic>
+#include <functional>
 #include <halp/audio.hpp>
 #include <halp/controls.hpp>
 #include <halp/mappers.hpp>
@@ -106,6 +108,15 @@ public:
     halp::midi_bus<"MIDI In", libremidi::message> midi;
     halp::toggle<"listening to MIDI", halp::toggle_setup{.init = true}> midi_gate;
 
+    // --- Multifile bank. Appended at the end so pre-existing scenarios restore
+    // all earlier ports positionally. The Sound port's folder is scanned; this
+    // 0-based index (clipped) selects which file plays.
+    struct : halp::spinbox_i32<"Sound index", halp::range{0, 127, 0}>
+    {
+    } sound_index;
+    // When on, every grain picks a random bank sound (overrides Sound index).
+    halp::toggle<"Random"> random;
+
   } inputs;
 
   struct
@@ -140,6 +151,35 @@ public:
   std::array<MidiVoice, 128> midi_voices{};
   bool midi_active{false};   // true when at least one MIDI note is held
   int midi_pending_voice{-1}; // index of next voice to spawn (-1 = none pending)
+
+  // --- Sound bank: scanned/decoded in a worker thread, swapped on the
+  // processing thread. Active grains keep their sound via shared_ptr holds.
+  SoundBank bank;
+  long bank_scan_phase{0};
+  bool bank_scan_inflight{false};
+
+  struct scan_request
+  {
+    std::string folder;
+    double rate;
+    SoundBank previous;
+  };
+
+  struct worker_t
+  {
+    std::function<void(std::shared_ptr<scan_request>)> request;
+
+    static std::function<void(Granola&)> work(std::shared_ptr<scan_request> rq)
+    {
+      auto bank = scan_folder(rq->folder, rq->rate, rq->previous);
+      return [bank = std::move(bank)](Granola& self) mutable {
+        self.bank = std::move(bank);
+        self.bank_scan_inflight = false;
+      };
+    }
+  } worker;
+
+  void request_scan();
 
   // t_critical  lock; // is there an equivalent?
 
