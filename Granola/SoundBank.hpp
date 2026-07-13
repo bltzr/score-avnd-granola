@@ -40,8 +40,8 @@ namespace Granola
 struct ParamSnapshot
 {
   float pos{1e-8f}, dur{0.1f};
-  float pos_j{0.f}, pos_j_r{1.f};
-  float dur_j{0.f}, dur_j_r{1.f};
+  float pos_j{0.f};
+  float dur_j{0.f};
   float win_x{0.f}, win_y{0.f};
 
   bool operator==(const ParamSnapshot&) const noexcept = default;
@@ -144,13 +144,16 @@ inline SoundBank scan_folder(
     const std::string& params_set, double rate, const SoundBank& previous)
 {
   SoundBank out;
-  out.folder = folder;
+  out.folder = folder; // raw input path, so the tick's change-detection is stable
   out.map_file = map_file;
   out.params_set = params_set.empty() ? "default" : params_set;
   if(folder.empty())
     return out;
 
-  QDir dir(QString::fromStdString(folder));
+  // The Sound input may be a folder or a file: a file resolves to its folder.
+  QFileInfo fi_in(QString::fromStdString(folder));
+  QDir dir = fi_in.isFile() ? fi_in.absoluteDir()
+                            : QDir(QString::fromStdString(folder));
   static const QStringList exts{"*.wav", "*.aif", "*.aiff", "*.flac",
                                 "*.mp3", "*.ogg",  "*.m4a"};
   const auto files = dir.entryInfoList(exts, QDir::Files, QDir::Name);
@@ -188,7 +191,8 @@ inline SoundBank scan_folder(
     for(auto& ch : snd->data)
       snd->ptrs.push_back(ch.data());
     compute_peaks(*snd, rate);
-    if(!snd->ptrs.empty())
+    // zero-frame files would give grains a negative buffer length
+    if(!snd->ptrs.empty() && !snd->data[0].empty())
       out.sounds.push_back(std::move(snd));
   }
 
@@ -249,9 +253,7 @@ inline SoundBank scan_folder(
           p.pos = o["pos"].toDouble(p.pos);
           p.dur = o["dur"].toDouble(p.dur);
           p.pos_j = o["pos_j"].toDouble(p.pos_j);
-          p.pos_j_r = o["pos_j_r"].toDouble(p.pos_j_r);
           p.dur_j = o["dur_j"].toDouble(p.dur_j);
-          p.dur_j_r = o["dur_j_r"].toDouble(p.dur_j_r);
           p.win_x = o["win_x"].toDouble(p.win_x);
           p.win_y = o["win_y"].toDouble(p.win_y);
           out.params.emplace(it.key().toStdString(), p);
@@ -283,10 +285,8 @@ inline bool write_params(
   for(const auto& [file, p] : params)
   {
     setobj[QString::fromStdString(file)] = QJsonObject{
-        {"pos", p.pos},           {"dur", p.dur},
-        {"pos_j", p.pos_j},       {"pos_j_r", p.pos_j_r},
-        {"dur_j", p.dur_j},       {"dur_j_r", p.dur_j_r},
-        {"win_x", p.win_x},       {"win_y", p.win_y},
+        {"pos", p.pos},     {"dur", p.dur},     {"pos_j", p.pos_j},
+        {"dur_j", p.dur_j}, {"win_x", p.win_x}, {"win_y", p.win_y},
     };
   }
   root[QString::fromStdString(params_set.empty() ? "default" : params_set)]

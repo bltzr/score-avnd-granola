@@ -39,44 +39,29 @@ public:
 
   struct ins
   {
-    struct : halp::soundfile_port<"Sound">
-    {
-      halp_flag(waveform);
-      // Reload automatically when the file changes on disk: lets Granola act
-      // as a live buffer player for the FluCoMa working folder (e.g. point it
-      // at nmf_resynth.wav and re-run BufNMF while playing).
-      halp_flag(file_watch);
-      void update(Granola& self)
-      {
-        self.outputs.audio.request_channels(this->channels());
-        //if (self.inputs.playing) self.trigger = true;
-        //qDebug() << "sound" << self.trigger;
-      }
-    } sound;
     //halp::soundfile_port<"Window", double> win; // not supported yet
     //halp::range_slider_f32<"In", halp::range_slider_range{-10, 100, {5, 20}}> ta_range;
-    halp::hslider_f32<"Position", halp::range{0.00000001, 1., 0.00000001}> pos;
+    // Jitter-range controls removed 2026-07-12: their spread is hardcoded to
+    // the former default of 1.0 in the tick. (Reduces the inlet count below
+    // score's 32-inlet nodal-fold threshold; breaks positional restore for
+    // ports after this point on pre-existing scenarios.)
+    halp::hslider_f32<"Position", halp::range{0., 1., 0.}> pos;
     halp::hslider_f32<"Position Jitter", halp::range{0., 1., 0.}> pos_j;
-    halp::knob_f32<"Position Jitter Range", halp::range{0., 1., 1.}> pos_j_r;
-    halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 0.1}> dur;
+    halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 1.}> dur;
     halp::hslider_f32<"Duration Jitter", halp::range{0., 1., 0.}> dur_j;
-    halp::knob_f32<"Duration Jitter Range", halp::range{0., 1., 1.}> dur_j_r;
     struct : halp::knob_f32<"Pitch", halp::range{0.000001, 10., 1.}>
     {
       using mapper = halp::inverse_mapper<halp::pow_mapper<4>>;
     } rate;
     halp::vslider_f32<"Pitch Jitter", halp::range{0., 1., 0.}> rate_j;
-    halp::knob_f32<"Pitch Jitter Range", halp::range{0., 1., 1.}> rate_j_r;
     halp::toggle<"Reverse"> reverse;
     struct : halp::accurate<halp::knob_f32<"Density", halp::range{0., 256., 1.}>>
     {
       using mapper = halp::log_mapper<std::ratio<99, 100>>;
     } density;
     halp::vslider_f32<"Density Jitter", halp::range{0., 1., 0.}> dens_j;
-    halp::hslider_f32<"Density Jitter Range", halp::range{0., 50., 1.}> dens_j_r;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
     halp::vslider_f32<"Gain Jitter", halp::range{0., 1., 0.}> gain_j;
-    halp::knob_f32<"Gain Jitter Range", halp::range{0., 1., 1.}> gain_j_r;
     halp::xy_pad_f32<"Window coefs", halp::range{0.f, 1.f, 0.f}> win_coefs;
     struct
     {
@@ -84,9 +69,9 @@ public:
     } interp_type;
     struct
     {
-      halp__enum_combobox("Window mode", Beta, Beta, Cos, Kuma)
+      halp__enum_combobox("Window mode", Kuma, Beta, Cos, Kuma)
     } window_mode;
-    halp::toggle<"Loop"> loopmode;
+    halp::toggle<"Warp", halp::toggle_setup{.init = true}> loopmode;
     struct : halp::spinbox_i32<"Source Channels", halp::range{1, NCHAN, 1}>
     {
     } src_channels;
@@ -112,9 +97,14 @@ public:
     halp::midi_bus<"MIDI In", libremidi::message> midi;
     halp::toggle<"listening to MIDI", halp::toggle_setup{.init = true}> midi_gate;
 
-    // --- Sound bank (multifile). New ports are appended at the end so saved
-    // scenarios keep their existing port ids.
-    halp::folder_port<"Sound folder"> sound_folder;
+    // --- Sound bank (multifile). Single "Sound" input: a folder loads all its
+    // files (first selected), a file loads its folder's files (that one
+    // selected). Held as a path string; the waveform widget and scan_folder
+    // resolve file-vs-folder.
+    halp::folder_port<"Sound"> sound_folder;
+    // 0-based index into the bank files; driven by the custom picker widget
+    // (which lists the folder UI-side). Random selection is the separate
+    // Random toggle appended below.
     struct : halp::spinbox_i32<"Sound index", halp::range{0, 127, 0}>
     {
     } sound_index;
@@ -127,6 +117,8 @@ public:
     // under the named set below.
     halp::toggle<"Local params"> local_params;
     halp::lineedit<"Params set", "default"> params_set;
+    // When on, every grain picks a random bank sound (overrides Sound index).
+    halp::toggle<"Random"> random;
 
   } inputs;
 
@@ -138,6 +130,15 @@ public:
   } outputs;
 
   struct ui;
+
+  // Advertise the panel's full height so score opens the slot expanded rather
+  // than at its short default (~300px), which clipped the taller panel and
+  // made it look collapsed. Read by the avnd LayerFactory::recommendedHeight;
+  // deliberately not `layout::graphics`/`compute`, so it is not a GPU node.
+  struct layout
+  {
+    static constexpr double height() { return 700.; }
+  };
 
   // --- Waveform UI messaging (score message bus, both directions).
   // The displayed sound is the one picked by the Sound index port ONLY;
@@ -181,9 +182,8 @@ public:
   ParamSnapshot param_snapshot() const noexcept
   {
     return ParamSnapshot{
-        inputs.pos,   inputs.dur,   inputs.pos_j,          inputs.pos_j_r,
-        inputs.dur_j, inputs.dur_j_r, inputs.win_coefs.value.x,
-        inputs.win_coefs.value.y};
+        inputs.pos,   inputs.dur, inputs.pos_j, inputs.dur_j,
+        inputs.win_coefs.value.x, inputs.win_coefs.value.y};
   }
 
   void apply_params(const ParamSnapshot& p) noexcept
@@ -191,9 +191,7 @@ public:
     inputs.pos.value = p.pos;
     inputs.dur.value = p.dur;
     inputs.pos_j.value = p.pos_j;
-    inputs.pos_j_r.value = p.pos_j_r;
     inputs.dur_j.value = p.dur_j;
-    inputs.dur_j_r.value = p.dur_j_r;
     inputs.win_coefs.value = {p.win_x, p.win_y};
   }
 
