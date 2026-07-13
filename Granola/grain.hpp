@@ -19,6 +19,22 @@
 
 #define NCHAN 8
 
+// Lightweight view over any per-channel sample storage (soundfile port,
+// sound-bank entry, ...). Grains capture one at spawn time together with a
+// shared_ptr hold keeping the storage alive for the grain's lifetime, so a
+// bank reload never pulls memory out from under a playing grain.
+struct GrainSource
+{
+  const float* const* data{};
+  long channels{0};
+  double frames{0};
+
+  explicit operator bool() const noexcept
+  {
+    return data && channels > 0 && frames > 0;
+  }
+};
+
 struct GranuGrain
 {
   bool m_active = false;
@@ -59,17 +75,19 @@ struct GranuGrain
 
   void
   set(double start, double dur_samps, double rate,
-      //long buffer_index, // add this when we have several buffers
       const boost::container::static_vector<double, 2>&
           shape_coef, // if one number then look for window, if two do shaping?, or add another inlet for
       const boost::container::static_vector<double, NCHAN>& amps,
-      const halp::soundfile_port<"Sound">& buf_proxy,
+      const GrainSource& src, std::shared_ptr<const void> src_hold,
       //const halp::soundfile_port<"Window">& wind_proxy, // future holder of optional window buffer
       //double sr,
       bool loopmode, long windowType, long channel_offset, long src_channels);
 
   //std::vector<double> incr( float *bufferData, long interpType );
-  std::span<double> incr(halp::soundfile_port<"Sound">& snd, long interpType);
+  std::span<double> incr(long interpType);
+
+  GrainSource m_source{};
+  std::shared_ptr<const void> m_source_hold{};
 
   void reset();
 
