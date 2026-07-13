@@ -440,15 +440,16 @@ struct Granola::ui
   halp_meta(layout, vbox)
   halp_meta(background, background_darker)
   halp::label title{"Granulator"};
-  halp::item<&ins::sound> sound; // soundfile chooser: loads the file/folder
 
-  // Position / duration / their jitters as value+set chips, driven by the
-  // waveform gestures (and editable in the inspector).
+  // The Sound port and pos/dur/their jitters as dot+label chips. The soundfile
+  // chooser stays in the inspector (load there); the panel just shows the dot.
   struct
   {
     halp_meta(name, "Ports")
     halp_meta(layout, hbox)
     halp_meta(background, background_dark)
+    halp::custom_control<PortDotValue<std::string>, &ins::sound> sound{
+        {.label = "sound"}};
     halp::custom_control<PortDotValue<float>, &ins::pos> position{{.label = "pos"}};
     halp::custom_control<PortDotValue<float>, &ins::pos_j> pos_jit{{.label = "posjit"}};
     halp::custom_control<PortDotValue<float>, &ins::dur> duration{{.label = "dur"}};
