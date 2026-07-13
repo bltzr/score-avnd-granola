@@ -103,6 +103,13 @@ struct WindowShapeItem
     ctx.draw_rounded_rect(0., 0., w, h, 3.);
     ctx.fill();
 
+    // Title painted on the widget's top row, next to the port dot.
+    ctx.begin_path();
+    ctx.set_fill_color({255, 255, 255, 255});
+    ctx.set_font_size(9.);
+    ctx.draw_text(16., 11., "Window coefficients");
+    ctx.fill();
+
     ctx.begin_path();
     ctx.move_to(pad, h - pad);
     for(int i = 0; i <= N; i++)
@@ -605,22 +612,6 @@ struct SoundPickerItem
   }
 };
 
-// Painted label placed just before the window-shape control, so the text sits
-// next to that control's port dot (the tall widget can't paint above itself).
-struct WinCoefLabel
-{
-  static constexpr double width() { return 160.; }
-  static constexpr double height() { return 14.; }
-  void paint(auto ctx)
-  {
-    ctx.begin_path();
-    ctx.set_fill_color({255, 255, 255, 255});
-    ctx.set_font_size(9.);
-    ctx.draw_text(14., 11., "Window coefficients");
-    ctx.fill();
-  }
-};
-
 // Small static text label with a controllable baseline (a halp::label's
 // vertical placement can't be nudged). Used for "win modes".
 struct WinModesLabel
@@ -745,8 +736,6 @@ struct Granola::ui
         halp::custom_control<WindowModeItem, &ins::window_mode> window_mode;
         halp::custom_actions_item<WinModesLabel> wm_label;
       } wm_box;
-      // Label painted next to the win-coef dot, then the widget below it.
-      halp::custom_actions_item<WinCoefLabel> wc_label;
       halp::custom_control<WindowShapeItem, &ins::win_coefs> win_coefs;
     } shape_box;
   } controls;
