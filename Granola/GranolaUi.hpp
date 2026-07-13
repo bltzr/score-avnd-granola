@@ -280,6 +280,35 @@ struct WaveformItem
     }
   }
 
+  // Drop a sound onto the waveform: a file loads it; a folder enables multi
+  // mode and anchors on its first audio file. (Needs the score-core drop
+  // forwarding in Crousti/Painter.hpp.)
+  std::function<void(std::string)> set_sound;
+  std::function<void(bool)> set_multi;
+  bool drop(const std::vector<std::string>& paths)
+  {
+    if(paths.empty())
+      return false;
+    const QFileInfo fi(QString::fromStdString(paths[0]));
+    static const QStringList exts{"*.wav", "*.aif", "*.aiff", "*.flac",
+                                  "*.mp3", "*.ogg",  "*.m4a"};
+    if(fi.isDir())
+    {
+      QDir dir(fi.absoluteFilePath());
+      const auto files = dir.entryList(exts, QDir::Files, QDir::Name);
+      if(files.isEmpty())
+        return false;
+      if(set_multi)
+        set_multi(true);
+      if(set_sound)
+        set_sound(dir.filePath(files[0]).toStdString());
+      return true;
+    }
+    if(set_sound)
+      set_sound(fi.absoluteFilePath().toStdString());
+    return true;
+  }
+
   static constexpr double draw_w() { return width() - left_pad - pad; }
   double win_x0() const
   {
@@ -516,6 +545,7 @@ struct SoundPickerItem
   std::string folder; // parent folder of the Sound path (synced)
   int value{0};       // Sound index (synced)
   bool multi{false};  // synced from the multi toggle
+  bool m_prev_multi{false}; // to catch the multi off->on transition
   std::function<void(int)> set;
   std::function<void()> update;
 
@@ -747,6 +777,22 @@ struct Granola::ui
         = sp.empty()
               ? std::string{}
               : QFileInfo(QString::fromStdString(sp)).absolutePath().toStdString();
+    // Enabling multi keeps the mono file selected: find it in the folder and
+    // set Sound index to it (instead of jumping to file 0).
+    if(m && !source_box.picker.m_prev_multi && !sp.empty())
+    {
+      const auto files = source_box.picker.files();
+      const std::string base
+          = QFileInfo(QString::fromStdString(sp)).fileName().toStdString();
+      for(int i = 0; i < (int)files.size(); i++)
+        if(files[i] == base)
+        {
+          if(source_box.picker.set)
+            source_box.picker.set(i);
+          break;
+        }
+    }
+    source_box.picker.m_prev_multi = m;
     if(source_box.picker.update)
       source_box.picker.update();
     if(source_box.random_tgl.update)
@@ -778,6 +824,15 @@ struct Granola::ui
       };
       wf.set_dur_j = [&self](float v) {
         if(auto& c = self.ports.dur_jit; c.set)
+          c.set(v);
+      };
+      // Drop onto the waveform -> load the Sound port / enable multi.
+      wf.set_sound = [&self](std::string v) {
+        if(auto& c = self.ports.sound; c.set)
+          c.set(std::move(v));
+      };
+      wf.set_multi = [&self](bool v) {
+        if(auto& c = self.source_box.multi_btn; c.set)
           c.set(v);
       };
       // A late-created panel asks the processor to resend the envelope.

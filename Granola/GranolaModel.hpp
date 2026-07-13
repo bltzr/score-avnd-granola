@@ -135,6 +135,13 @@ public:
 
   struct ui;
 
+  // Advertise the panel height so score opens the temporal slot expanded to
+  // fit the waveform + controls, rather than at its short default.
+  struct layout
+  {
+    static constexpr double height() { return 420.; }
+  };
+
   // --- Waveform UI messaging (score message bus, processor -> UI). The UI has
   // no direct access to the decoded audio, so the processor ships a
   // downsampled envelope of the current sound whenever it changes.
