@@ -509,8 +509,8 @@ struct WaveformItem
       ctx.set_stroke_width(1.);
       ctx.stroke();
 
-      // jitter bands (±2σ; σ = jitter * range / 4): position at the start
-      // edge, duration at the end edge
+      // jitter bands: position (±, symmetric) at the start edge; duration
+      // (add-only, so one-sided) extending right from the end edge.
       auto band = ctx.to_rgba(halp::colors::editable_value_light);
       band.a = 40;
       const double pj = pos_j * pos_j_r / 2. * draw_w();
@@ -521,11 +521,11 @@ struct WaveformItem
         ctx.set_fill_color(band);
         ctx.fill();
       }
-      const double dj = dur_j * dur_j_r / 2. * draw_w();
+      const double dj = dur_j / 2. * draw_w();
       if(dj > 0.5)
       {
         ctx.begin_path();
-        ctx.draw_rect(x1 - dj, pad, 2. * dj, h - 2. * pad);
+        ctx.draw_rect(x1, pad, dj, h - 2. * pad);
         ctx.set_fill_color(band);
         ctx.fill();
       }
@@ -578,7 +578,16 @@ struct WaveformItem
 
     constexpr double edge = 10.;
     const double x0 = win_x0(), x1 = win_x1();
-    if(std::abs(x - x0) <= edge)
+    // When the window is too narrow for a distinct centre between the two edge
+    // zones, the jitter edges would swallow the duration zone. Below that, the
+    // whole window (plus a small grab margin) acts on duration only; the edges
+    // (jitters) only take over once the window is wide enough to discriminate.
+    if((x1 - x0) < 3. * edge)
+    {
+      m_zone = (x >= x0 - edge && x <= x1 + edge) ? drag_zone::window
+                                                  : drag_zone::none;
+    }
+    else if(std::abs(x - x0) <= edge)
       m_zone = drag_zone::start_edge;
     else if(std::abs(x - x1) <= edge)
       m_zone = drag_zone::end_edge;

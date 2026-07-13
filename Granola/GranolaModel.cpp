@@ -272,6 +272,18 @@ void Granola::operator()(tick t)
 
   double density = inputs.density * (1 + dist(rd) * inputs.dens_j);
 
+  // Effective base duration for spawn timing. Two corrections:
+  //  - clamp sub-minimum (stale / automated) values up to the slider minimum,
+  //    so Duration ~= 0 can't drop the spawn interval to 1 sample (which packs
+  //    ~64-sample grains back-to-back into a degenerate, voice-count-dependent
+  //    grain pile);
+  //  - add the mean of the add-only duration jitter (E[|N(0,1/4)|]*dur_j ~=
+  //    0.2*dur_j) so the spawn rate tracks the AVERAGE jittered grain length.
+  // Together these keep the active-grain count ~= Density regardless of
+  // Duration or Duration Jitter.
+  const double dur_base = std::max((double)inputs.dur, 0.01);
+  const double eff_dur = dur_base + 0.2 * (double)inputs.dur_j;
+
   if (inputs.trig ) {
     trigger = true;
     /*trigger_counter = inputs.sound.frames() * inputs.dur
@@ -313,8 +325,14 @@ void Granola::operator()(tick t)
 
           float pos = inputs.pos + std::normal_distribution<float>
                                    (0., 1.0f / 4)(rd) * inputs.pos_j;
-          float dur = inputs.dur + std::normal_distribution<float>
-                                   (0., 1.0f / 4)(rd) * inputs.dur_j;
+          // Duration jitter only lengthens grains (add, never subtract). dur_base
+          // is already clamped to the minimum, so a stale/automated Duration of 0
+          // plays as a normal short grain rather than the "whole file" that
+          // GranuGrain::set reads for a <= 0 duration.
+          float dur = dur_base
+                      + std::abs(std::normal_distribution<float>(0., 1.0f / 4)(rd)
+                                 * inputs.dur_j);
+          dur = std::max(dur, 64.f / (float)cur.frames);
           float rate;
           boost::container::static_vector<double, NCHAN> spawn_ampvec = ampvec;
           // Per-voice source: MIDI zones can map this note to another sound
@@ -396,7 +414,8 @@ void Granola::operator()(tick t)
       // One shared trigger fires all active notes simultaneously.
       // Grains are spawned one per sample over consecutive samples (via
       // midi_pending_voice), so a chord of N notes costs N samples to fully spawn.
-      if(trigger_counter >= cur.frames * inputs.dur / (density * inputs.rate))
+      if(trigger_counter
+         >= std::max(cur.frames * eff_dur / (density * inputs.rate), 1.0))
       {
         // start scanning from the first active voice
         midi_pending_voice = 0;
@@ -411,7 +430,8 @@ void Granola::operator()(tick t)
     }
     else if(inputs.playing)
     {
-      if(trigger_counter >= cur.frames * inputs.dur / (density * inputs.rate))
+      if(trigger_counter
+         >= std::max(cur.frames * eff_dur / (density * inputs.rate), 1.0))
       {
         trigger = true;
         trigger_counter = 0;
