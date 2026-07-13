@@ -75,6 +75,7 @@ void Granola::operator()(tick t)
   // per-grain random); otherwise the single Sound-port file.
   GrainSource cur{};
   std::shared_ptr<const void> cur_hold{};
+  const BankSound* cur_bank_snd = nullptr;
   const bool random_pick = inputs.multi && !bank.sounds.empty() && inputs.random;
   if(inputs.multi && !bank.sounds.empty())
   {
@@ -82,6 +83,7 @@ void Granola::operator()(tick t)
     const int idx = random_pick ? 0 : CLAMP(inputs.sound_index.value, 0, N - 1);
     cur = bank.sounds[idx]->view();
     cur_hold = bank.sounds[idx];
+    cur_bank_snd = bank.sounds[idx].get();
   }
   else if(inputs.sound && inputs.sound.channels() > 0)
   {
@@ -91,6 +93,45 @@ void Granola::operator()(tick t)
   }
   if(!cur)
     return;
+
+  // Waveform UI: ship the current sound's envelope when it changes (bank entry
+  // or mono file) or a freshly (re)created panel asks for a refresh.
+  if(send_message)
+  {
+    const std::string_view cur_name
+        = cur_bank_snd ? std::string_view(cur_bank_snd->name) : snd_path;
+    const int64_t cur_mtime = cur_bank_snd ? cur_bank_snd->mtime : 0;
+    if(ui_refresh || ui_sound_name != cur_name || ui_sound_mtime != cur_mtime)
+    {
+      processor_to_ui msg;
+      msg.name = std::string(cur_name);
+      if(cur_bank_snd)
+      {
+        msg.min_peaks = cur_bank_snd->min_peaks;
+        msg.max_peaks = cur_bank_snd->max_peaks;
+        msg.duration_s = cur_bank_snd->duration_s;
+      }
+      else
+      {
+        // mono: recompute the envelope from the Sound port when the file changes
+        if(mono_peaks_path != snd_path)
+        {
+          compute_peaks_raw(
+              inputs.sound.soundfile.data, (int)inputs.sound.channels(),
+              (int64_t)inputs.sound.frames(), samplerate, mono_min_peaks,
+              mono_max_peaks, mono_duration_s);
+          mono_peaks_path = std::string(snd_path);
+        }
+        msg.min_peaks = mono_min_peaks;
+        msg.max_peaks = mono_max_peaks;
+        msg.duration_s = mono_duration_s;
+      }
+      send_message(std::move(msg));
+      ui_refresh = false;
+      ui_sound_name = cur_name;
+      ui_sound_mtime = cur_mtime;
+    }
+  }
 
   const int n_channels = CLAMP(inputs.src_channels, 1, (int)cur.channels);
   const int ch_offset

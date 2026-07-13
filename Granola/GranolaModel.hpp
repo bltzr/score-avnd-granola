@@ -135,6 +135,32 @@ public:
 
   struct ui;
 
+  // --- Waveform UI messaging (score message bus, processor -> UI). The UI has
+  // no direct access to the decoded audio, so the processor ships a
+  // downsampled envelope of the current sound whenever it changes.
+  struct processor_to_ui
+  {
+    std::vector<float> min_peaks, max_peaks;
+    std::string name;
+    float duration_s{};
+  };
+  struct ui_to_processor
+  {
+    // Refresh request, sent when the UI panel is (re)created so a late panel
+    // still gets the current envelope.
+  };
+  std::function<void(processor_to_ui)> send_message;
+  void process_message(const ui_to_processor&) { ui_refresh = true; }
+
+  bool ui_refresh{true};
+  std::string ui_sound_name;  // name/path of the sound last sent to the UI
+  int64_t ui_sound_mtime{-1};
+  // Cached envelope of the current MONO file (the bank holds its own peaks, but
+  // mono plays the Sound port directly); recomputed when that file changes.
+  std::vector<float> mono_min_peaks, mono_max_peaks;
+  float mono_duration_s{};
+  std::string mono_peaks_path;
+
   struct MidiVoice
   {
     bool active{false};
