@@ -206,10 +206,10 @@ struct WindowModeItem
 // A cable port shown as a small "label value" chip, carrying the port's value
 // (synced) and a set hook. The pos/dur/jitter ports use this: the waveform
 // gestures are the editor, this shows the current number and feeds the widget.
-template <typename T>
+template <typename T, int W = 80>
 struct PortDotValue
 {
-  static constexpr double width() { return 80.; }
+  static constexpr double width() { return double(W); }
   static constexpr double height() { return 16.; }
 
   std::string_view label;
@@ -481,15 +481,15 @@ struct Granola::ui
     halp_meta(name, "Ports")
     halp_meta(layout, hbox)
     halp_meta(background, background_dark)
-    halp::custom_control<PortDotValue<std::string>, &ins::sound> sound{
+    halp::custom_control<PortDotValue<std::string, 40>, &ins::sound> sound{
         {.label = "sound"}};
-    halp::custom_control<PortDotValue<float>, &ins::pos> position{
+    halp::custom_control<PortDotValue<float, 60>, &ins::pos> position{
         {.label = "position"}};
-    halp::custom_control<PortDotValue<float>, &ins::pos_j> pos_jit{
+    halp::custom_control<PortDotValue<float, 60>, &ins::pos_j> pos_jit{
         {.label = "± deviation"}};
-    halp::custom_control<PortDotValue<float>, &ins::dur> duration{
+    halp::custom_control<PortDotValue<float, 60>, &ins::dur> duration{
         {.label = "duration"}};
-    halp::custom_control<PortDotValue<float>, &ins::dur_j> dur_jit{
+    halp::custom_control<PortDotValue<float, 60>, &ins::dur_j> dur_jit{
         {.label = "± deviation"}};
   } ports;
 
