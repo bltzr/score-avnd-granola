@@ -148,7 +148,8 @@ public:
   struct processor_to_ui
   {
     std::vector<float> min_peaks, max_peaks;
-    std::string name;
+    std::string name;   // current sound basename
+    std::string folder; // its containing folder (the UI can't read the port path)
     float duration_s{};
   };
   struct ui_to_processor

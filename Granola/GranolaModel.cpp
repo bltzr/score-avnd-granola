@@ -104,7 +104,12 @@ void Granola::operator()(tick t)
     if(ui_refresh || ui_sound_name != cur_name || ui_sound_mtime != cur_mtime)
     {
       processor_to_ui msg;
-      msg.name = std::string(cur_name);
+      // The UI can't read the soundfile port's path, so ship the folder +
+      // basename for the picker / current-file selection.
+      const QFileInfo fi(QString::fromStdString(std::string(snd_path)));
+      msg.folder = fi.absolutePath().toStdString();
+      msg.name = cur_bank_snd ? std::string(cur_bank_snd->name)
+                              : fi.fileName().toStdString();
       if(cur_bank_snd)
       {
         msg.min_peaks = cur_bank_snd->min_peaks;
