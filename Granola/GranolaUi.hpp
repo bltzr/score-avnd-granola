@@ -103,13 +103,6 @@ struct WindowShapeItem
     ctx.draw_rounded_rect(0., 0., w, h, 3.);
     ctx.fill();
 
-    // Title in the header row above the widget, to the right of the dot.
-    ctx.begin_path();
-    ctx.set_fill_color({255, 255, 255, 255});
-    ctx.set_font_size(9.);
-    ctx.draw_text(16., -4., "Window coefficients");
-    ctx.fill();
-
     ctx.begin_path();
     ctx.move_to(pad, h - pad);
     for(int i = 0; i <= N; i++)
@@ -612,33 +605,19 @@ struct SoundPickerItem
   }
 };
 
-// Bound to the Random toggle; a checkbox shown only when multi is on.
-struct RandomToggle
+// Painted label placed just before the window-shape control, so the text sits
+// next to that control's port dot (the tall widget can't paint above itself).
+struct WinCoefLabel
 {
-  static constexpr double width() { return 70.; }
-  static constexpr double height() { return 20.; }
-
-  bool value{false}; // random toggle
-  bool multi{false}; // synced from the multi toggle
-  std::function<void(bool)> set;
-  std::function<void()> update;
-
+  static constexpr double width() { return 160.; }
+  static constexpr double height() { return 14.; }
   void paint(auto ctx)
   {
-    if(!multi)
-      return;
     ctx.begin_path();
-    ctx.set_fill_color(halp::colors::mid);
+    ctx.set_fill_color({255, 255, 255, 255});
     ctx.set_font_size(9.);
-    ctx.draw_text(2., 14., value ? "random ✓" : "random ☐");
+    ctx.draw_text(14., 11., "Window coefficients");
     ctx.fill();
-  }
-
-  bool mouse_press(double, double)
-  {
-    if(multi && set)
-      set(!value);
-    return true;
   }
 };
 
@@ -705,7 +684,7 @@ struct Granola::ui
     halp_meta(background, background_dark)
     halp::custom_control<MultiButton, &ins::multi> multi_btn;
     halp::custom_control<SoundPickerItem, &ins::sound_index> picker;
-    halp::custom_control<RandomToggle, &ins::random> random_tgl;
+    halp::item<&ins::random> random;
   } source_box;
 
   struct
@@ -766,7 +745,8 @@ struct Granola::ui
         halp::custom_control<WindowModeItem, &ins::window_mode> window_mode;
         halp::custom_actions_item<WinModesLabel> wm_label;
       } wm_box;
-      // Its title is drawn inside the widget (top-left), like flucoma.
+      // Label painted next to the win-coef dot, then the widget below it.
+      halp::custom_actions_item<WinCoefLabel> wc_label;
       halp::custom_control<WindowShapeItem, &ins::win_coefs> win_coefs;
     } shape_box;
   } controls;
@@ -795,7 +775,6 @@ struct Granola::ui
     const bool m = source_box.multi_btn.value;
     auto& pk = source_box.picker;
     pk.multi = m;
-    source_box.random_tgl.multi = m;
     // Folder + current file come from the bus (process_message). Enabling multi
     // keeps the current file selected instead of jumping to index 0.
     if(m && !pk.m_prev_multi && !pk.folder.empty())
@@ -812,8 +791,6 @@ struct Granola::ui
     pk.m_prev_multi = m;
     if(pk.update)
       pk.update();
-    if(source_box.random_tgl.update)
-      source_box.random_tgl.update();
     if(source_box.multi_btn.update)
       source_box.multi_btn.update();
   }
