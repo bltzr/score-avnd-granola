@@ -481,15 +481,15 @@ struct Granola::ui
     halp_meta(name, "Ports")
     halp_meta(layout, hbox)
     halp_meta(background, background_dark)
-    halp::custom_control<PortDotValue<std::string, 40>, &ins::sound> sound{
+    halp::custom_control<PortDotValue<std::string, 48>, &ins::sound> sound{
         {.label = "sound"}};
-    halp::custom_control<PortDotValue<float, 60>, &ins::pos> position{
+    halp::custom_control<PortDotValue<float, 68>, &ins::pos> position{
         {.label = "position"}};
-    halp::custom_control<PortDotValue<float, 60>, &ins::pos_j> pos_jit{
+    halp::custom_control<PortDotValue<float, 68>, &ins::pos_j> pos_jit{
         {.label = "± deviation"}};
-    halp::custom_control<PortDotValue<float, 60>, &ins::dur> duration{
+    halp::custom_control<PortDotValue<float, 68>, &ins::dur> duration{
         {.label = "duration"}};
-    halp::custom_control<PortDotValue<float, 60>, &ins::dur_j> dur_jit{
+    halp::custom_control<PortDotValue<float, 68>, &ins::dur_j> dur_jit{
         {.label = "± deviation"}};
   } ports;
 
