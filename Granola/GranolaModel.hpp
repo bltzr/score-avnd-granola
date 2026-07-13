@@ -116,6 +116,10 @@ public:
     } sound_index;
     // When on, every grain picks a random bank sound (overrides Sound index).
     halp::toggle<"Random"> random;
+    // Master gate for the bank. Off (default) = the single Sound-port file
+    // only (folder is not scanned); on = the multifile bank with index/random.
+    // Also drives the UI: off shows an "enable" button, on shows the picker.
+    halp::toggle<"Multiple sound support"> multi;
 
   } inputs;
 
@@ -157,6 +161,7 @@ public:
   SoundBank bank;
   long bank_scan_phase{0};
   bool bank_scan_inflight{false};
+  std::string last_sound_path; // to reset captured grains when the file changes
 
   struct scan_request
   {
