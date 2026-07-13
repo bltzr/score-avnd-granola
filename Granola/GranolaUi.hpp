@@ -20,7 +20,7 @@ namespace Granola
 struct WindowShapeItem
 {
   static constexpr double width() { return 220.; }
-  static constexpr double height() { return 120.; }
+  static constexpr double height() { return 140.; }
 
   halp::xy_type<float> value{};
   halp::transaction<halp::xy_type<float>> transaction;
@@ -103,11 +103,11 @@ struct WindowShapeItem
     ctx.draw_rounded_rect(0., 0., w, h, 3.);
     ctx.fill();
 
-    // Title floating in the (empty) top-left corner, to the right of the dot.
+    // Title in the header row above the widget, to the right of the dot.
     ctx.begin_path();
     ctx.set_fill_color({255, 255, 255, 255});
     ctx.set_font_size(9.);
-    ctx.draw_text(16., 12., "Window coefficients");
+    ctx.draw_text(16., -4., "Window coefficients");
     ctx.fill();
 
     ctx.begin_path();
@@ -642,6 +642,22 @@ struct RandomToggle
   }
 };
 
+// Small static text label with a controllable baseline (a halp::label's
+// vertical placement can't be nudged). Used for "win modes".
+struct WinModesLabel
+{
+  static constexpr double width() { return 58.; }
+  static constexpr double height() { return 24.; }
+  void paint(auto ctx)
+  {
+    ctx.begin_path();
+    ctx.set_fill_color(halp::colors::mid);
+    ctx.set_font_size(9.);
+    ctx.draw_text(2., 18., "win modes");
+    ctx.fill();
+  }
+};
+
 struct Granola::ui
 {
   using enum halp::colors;
@@ -748,7 +764,7 @@ struct Granola::ui
         halp_meta(background, background_dark)
         halp::item<&ins::reverse> reverse;
         halp::custom_control<WindowModeItem, &ins::window_mode> window_mode;
-        halp::label wm_label{"win modes"};
+        halp::custom_actions_item<WinModesLabel> wm_label;
       } wm_box;
       // Its title is drawn inside the widget (top-left), like flucoma.
       halp::custom_control<WindowShapeItem, &ins::win_coefs> win_coefs;
