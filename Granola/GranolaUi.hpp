@@ -6,6 +6,7 @@
 #include <Media/AudioDecoder.hpp>
 
 #include <QCursor>
+#include <QDir>
 #include <QFileInfo>
 #include <QMenu>
 
@@ -463,6 +464,152 @@ struct WaveformItem
   }
 };
 
+// --- Sound-source controls, gated by the "Multiple sound support" toggle.
+// When off: only the enable button shows (click -> turns multi on). When on:
+// the file picker + random toggle show. `multi` and `folder` are synced from
+// the ports in on_control_update; each widget's `set` drives its bound port.
+
+// Bound to the multi toggle: the enable button (off) / mono affordance (on).
+struct MultiButton
+{
+  static constexpr double width() { return 150.; }
+  static constexpr double height() { return 20.; }
+
+  bool value{false}; // multi toggle
+  std::function<void(bool)> set;
+  std::function<void()> update;
+
+  void paint(auto ctx)
+  {
+    if(!value)
+    {
+      ctx.begin_path();
+      ctx.set_fill_color(halp::colors::background_darker);
+      ctx.draw_rounded_rect(0., 0., width(), height(), 3.);
+      ctx.fill();
+      ctx.begin_path();
+      ctx.set_fill_color({255, 255, 255, 255});
+      ctx.set_font_size(9.);
+      ctx.draw_text(6., 14., "＋ multiple sound support");
+      ctx.fill();
+    }
+    else
+    {
+      ctx.begin_path();
+      ctx.set_fill_color(halp::colors::mid);
+      ctx.set_font_size(8.);
+      ctx.draw_text(2., 13., "multi ✓  (click → mono)");
+      ctx.fill();
+    }
+  }
+
+  bool mouse_press(double, double)
+  {
+    if(set)
+      set(!value);
+    return true;
+  }
+};
+
+// Bound to the Sound index port. Lists the folder's files (from the sound
+// path, synced UI-side so it works in edit mode); click opens a file menu.
+// Hidden when multi is off.
+struct SoundPickerItem
+{
+  static constexpr double width() { return 160.; }
+  static constexpr double height() { return 20.; }
+
+  std::string folder; // parent folder of the Sound path (synced)
+  int value{0};       // Sound index (synced)
+  bool multi{false};  // synced from the multi toggle
+  std::function<void(int)> set;
+  std::function<void()> update;
+
+  std::vector<std::string> files() const
+  {
+    std::vector<std::string> out;
+    if(folder.empty())
+      return out;
+    static const QStringList exts{"*.wav", "*.aif", "*.aiff", "*.flac",
+                                  "*.mp3", "*.ogg",  "*.m4a"};
+    QDir dir(QString::fromStdString(folder));
+    for(const auto& f : dir.entryList(exts, QDir::Files, QDir::Name))
+      out.push_back(f.toStdString());
+    return out;
+  }
+
+  void paint(auto ctx)
+  {
+    if(!multi)
+      return;
+    ctx.begin_path();
+    ctx.set_fill_color(halp::colors::background_darker);
+    ctx.draw_rounded_rect(0., 0., width(), height(), 2.);
+    ctx.fill();
+
+    const auto fl = files();
+    const char* label = fl.empty() ? "(no folder)"
+                        : (value >= 0 && value < (int)fl.size()) ? fl[value].c_str()
+                                                                 : "-";
+    ctx.begin_path();
+    ctx.set_fill_color({255, 255, 255, 255});
+    ctx.set_font_size(9.);
+    ctx.draw_text(4., 14., label);
+    ctx.fill();
+  }
+
+  bool mouse_press(double, double)
+  {
+    if(!multi)
+      return false;
+    const auto fl = files();
+    if(fl.empty())
+      return true;
+    QMenu menu;
+    for(int i = 0; i < (int)fl.size(); i++)
+    {
+      auto* a = menu.addAction(QString::fromStdString(fl[i]));
+      a->setCheckable(true);
+      a->setChecked(i == value);
+      a->setData(i);
+    }
+    if(auto* chosen = menu.exec(QCursor::pos()))
+      if(set)
+        set(chosen->data().toInt());
+    return true;
+  }
+};
+
+// Bound to the Random toggle; a checkbox shown only when multi is on.
+struct RandomToggle
+{
+  static constexpr double width() { return 70.; }
+  static constexpr double height() { return 20.; }
+
+  bool value{false}; // random toggle
+  bool multi{false}; // synced from the multi toggle
+  std::function<void(bool)> set;
+  std::function<void()> update;
+
+  void paint(auto ctx)
+  {
+    if(!multi)
+      return;
+    ctx.begin_path();
+    ctx.set_fill_color(halp::colors::mid);
+    ctx.set_font_size(9.);
+    ctx.draw_text(2., 14., value ? "random ✓" : "random ☐");
+    ctx.fill();
+  }
+
+  bool mouse_press(double, double)
+  {
+    if(multi && set)
+      set(!value);
+    return true;
+  }
+};
+
 struct Granola::ui
 {
   using enum halp::colors;
@@ -492,6 +639,18 @@ struct Granola::ui
     halp::custom_control<PortDotValue<float, 68>, &ins::dur_j> dur_jit{
         {.label = "± deviation"}};
   } ports;
+
+  // Sound-source row: the multi enable button, and (when multi is on) the file
+  // picker + random toggle.
+  struct
+  {
+    halp_meta(name, "Source")
+    halp_meta(layout, hbox)
+    halp_meta(background, background_dark)
+    halp::custom_control<MultiButton, &ins::multi> multi_btn;
+    halp::custom_control<SoundPickerItem, &ins::sound_index> picker;
+    halp::custom_control<RandomToggle, &ins::random> random_tgl;
+  } source_box;
 
   struct
   {
@@ -579,6 +738,23 @@ struct Granola::ui
     wf.reload_from_path();
     if(wf.update)
       wf.update();
+
+    // Sound-source row: the multi toggle gates the picker + random; the picker
+    // lists the Sound path's parent folder.
+    const bool m = source_box.multi_btn.value;
+    source_box.picker.multi = m;
+    source_box.random_tgl.multi = m;
+    const std::string& sp = ports.sound.value;
+    source_box.picker.folder
+        = sp.empty()
+              ? std::string{}
+              : QFileInfo(QString::fromStdString(sp)).absolutePath().toStdString();
+    if(source_box.picker.update)
+      source_box.picker.update();
+    if(source_box.random_tgl.update)
+      source_box.random_tgl.update();
+    if(source_box.multi_btn.update)
+      source_box.multi_btn.update();
   }
 
   struct bus
