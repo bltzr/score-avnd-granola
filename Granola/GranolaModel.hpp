@@ -115,7 +115,7 @@ public:
     // --- Multifile bank. Appended at the end so pre-existing scenarios restore
     // all earlier ports positionally. The Sound port's folder is scanned; this
     // 0-based index (clipped) selects which file plays.
-    struct : halp::spinbox_i32<"Sound index", halp::range{0, 127, 0}>
+    struct : halp::spinbox_i32<"Sound index", halp::range{0, 4096, 0}>
     {
     } sound_index;
     // When on, every grain picks a random bank sound (overrides Sound index).
