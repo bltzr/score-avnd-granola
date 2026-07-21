@@ -1,0 +1,16 @@
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [master, main, dev, develop]
+    tags: ['v*']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: ossia/actions/.github/workflows/score-addon.yml@master
+    secrets: inherit
