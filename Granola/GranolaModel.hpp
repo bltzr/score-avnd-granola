@@ -30,6 +30,10 @@ class Granola
 public:
   halp_meta(name, "Granola")
   halp_meta(category, "Audio/Synth")
+  halp_meta(
+      description,
+      "Generate granular audio from a sound file with controllable position, duration, "
+      "pitch, density and jitter.")
   halp_meta(c_name, "granola")
   halp_meta(uuid, "38F9684D-54A6-4F48-91E4-3B251F0956EA")
 
