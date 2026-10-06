@@ -29,7 +29,7 @@ class Granola
 {
 public:
   halp_meta(name, "Granola")
-  halp_meta(category, "Audio/Synth")
+  halp_meta(category, "Synths")
   halp_meta(
       description,
       "Generate granular audio from a sound file with controllable position, duration, "
