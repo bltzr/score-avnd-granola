@@ -23,9 +23,8 @@ void GranuGrain::reset()
 {
   m_active = false;
   m_source = {};
-  // m_source_hold is let go of by the owner of the grain: the grain may hold
-  // the last reference to its sound, which must not be freed on the audio
-  // thread.
+  // Releasing a pin never frees anything: the host does, later
+  m_pin.reset();
   amp_init.clear();
   amp_init.reserve(NCHAN);
   m_chan_amp.clear();
@@ -44,14 +43,14 @@ void GranuGrain::set(
     double start, double dur_samps, double rate,
     const boost::container::static_vector<double, 2>& shape_coef,
     const boost::container::static_vector<double, NCHAN>& amps,
-    const GrainSource& src, std::shared_ptr<const void> src_hold,
+    const GrainSource& src, halp::sound_pin pin,
     //const halp::soundfile_port<"Window">& wind_proxy,
     //double sr,
     bool loopmode, long windowType, long channel_offset, long src_channels)
 {
   using namespace std;
   m_source = src;
-  m_source_hold = std::move(src_hold);
+  m_pin = std::move(pin);
   m_buf_len = src.frames - 1;
   m_buf_chans = src.channels;
   //m_buf_sr = sr;

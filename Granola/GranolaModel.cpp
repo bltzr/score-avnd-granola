@@ -21,59 +21,44 @@ void Granola::prepare(setup info)
   // adding nor removing voices allocates or frees on the audio thread.
   resize(max_voices);
   set_voice_count(inputs.num_voices);
+}
 
-  if(!scan)
+int Granola::find_folder_index()
+{
+  const auto& sounds = inputs.sounds;
+  const auto name = std::hash<std::string_view>{}(inputs.sound_file.value);
+  if(sounds.generation() != folder_index_generation || name != folder_index_name)
   {
-    scan = std::make_shared<scan_state>();
-    // Written on the processing thread: no allocation there for any folder
-    // path shorter than this.
-    scan->folder.reserve(4096);
-    scan->released.reserve(released.capacity());
+    folder_index_generation = sounds.generation();
+    folder_index_name = name;
+    folder_index = sounds.find(inputs.sound_file.value);
+    // No such file, e.g. none picked yet: the first one
+    if(folder_index < 0 && !sounds.empty())
+      folder_index = 0;
   }
-
-  if(inputs.multi)
-    request_scan();
+  return folder_index;
 }
 
-void Granola::request_scan()
+int Granola::random_ready_index()
 {
-  if(bank_scan_inflight || !scan)
-    return;
-  bank_scan_inflight = true;
-
-  // No scan is in flight: the worker does not touch the state now.
-  scan->folder.assign(inputs.sound.soundfile.filename);
-  scan->rate = samplerate;
-  for(auto& h : released)
-    scan->released.push_back(std::move(h));
-  released.clear();
-
-  worker.request(scan);
-}
-
-void Granola::apply_scan::operator()(Granola& self) noexcept
-{
-  std::swap(self.bank, bank);
-  // The bank replaced goes back to the worker, which frees it at its next scan
-  if(self.scan)
-    self.scan->retired = std::move(bank);
-  self.bank_scan_inflight = false;
-}
-
-void Granola::release(std::shared_ptr<const void>& hold) noexcept
-{
-  // The last hold of a sound that left the bank: freeing it would happen here,
-  // on the processing thread. It is kept for the worker instead.
-  if(hold && hold.use_count() == 1 && released.size() < released.capacity())
-    released.push_back(std::move(hold));
-  hold.reset();
+  const auto& sounds = inputs.sounds;
+  const int n = (int)sounds.size();
+  if(n == 0)
+    return -1;
+  // A random file, or the next one that could be decoded
+  const int start = int(unsigned(rd()) % unsigned(n));
+  for(int k = 0; k < n; k++)
+  {
+    const int i = (start + k) % n;
+    if(sounds[i].status == halp::sound_status::ready)
+      return i;
+  }
+  return -1;
 }
 
 void Granola::resize(int n)
 {
   buf_soft_lock = true; /// TODO: use a mutex or something?
-  for(auto& grain : grains)
-    release(grain.m_source_hold);
   grains.resize(n);
   clear();
   buf_soft_lock = false;
@@ -88,19 +73,13 @@ void Granola::set_voice_count(int n)
   // The voices past the count stop
   n = std::clamp(n, 0, max_voices);
   for(std::size_t i = n; i < grains.size(); i++)
-  {
     grains[i].reset();
-    release(grains[i].m_source_hold);
-  }
 }
 
 void Granola::clear()
 {
   for(auto& grain : grains)
-  {
     grain.reset();
-    release(grain.m_source_hold);
-  }
 }
 
 void Granola::send_playheads(int frames, const GrainSource& cur)
@@ -140,43 +119,32 @@ void Granola::operator()(tick t)
 {
   using namespace std;
 
-  // A changed Sound-port file resets active grains: in mono mode a grain
-  // captured the previous (now-freed) buffer; the clear makes new grains
-  // capture the current one. (Bank grains hold their sound, but a file change
-  // also means a folder change, so the reset is harmless there too.)
+  // A changed Sound file is freed once replaced: the grains still reading it
+  // stop. The grains of the folder pin their file and play on.
   const std::string_view snd_path = inputs.sound.soundfile.filename;
   const std::size_t snd_path_hash = std::hash<std::string_view>{}(snd_path);
   if(snd_path_hash != last_sound_path)
   {
     last_sound_path = snd_path_hash;
-    clear();
+    for(auto& grain : grains)
+      if(!grain.m_pin)
+        grain.reset();
   }
 
-  // Folder rescan only in multifile mode (worker thread; ~2x/second), immediate
-  // when the folder changes. Mono mode never decodes the folder.
-  bank_scan_phase += t.frames;
-  if(inputs.multi
-     && (bank.folder != snd_path || bank_scan_phase >= (long)(samplerate / 2)))
-  {
-    bank_scan_phase = 0;
-    request_scan();
-  }
-
-  // Current sound: in multifile mode, the bank entry chosen by Sound index (or
-  // per-grain random); otherwise the single Sound-port file.
+  // Current sound: the Sound file, or the file of the folder picked by name
+  // (in random mode, each grain picks its own and this one is shown).
+  const bool from_folder = inputs.source.value == decltype(inputs.source.value)::Folder;
   GrainSource cur{};
-  std::shared_ptr<const void> cur_hold{};
-  const BankSound* cur_bank_snd = nullptr;
-  int cur_bank_idx = -1;
-  const bool random_pick = inputs.multi && !bank.sounds.empty() && inputs.random;
-  if(inputs.multi && !bank.sounds.empty())
+  int cur_index = -1;
+  if(from_folder)
   {
-    const int N = (int)bank.sounds.size();
-    const int idx = random_pick ? 0 : CLAMP(inputs.sound_index.value, 0, N - 1);
-    cur_bank_idx = idx;
-    cur = bank.sounds[idx]->view();
-    cur_hold = bank.sounds[idx];
-    cur_bank_snd = bank.sounds[idx].get();
+    cur_index = find_folder_index();
+    if(cur_index >= 0)
+    {
+      const auto& snd = inputs.sounds[cur_index];
+      if(snd.status == halp::sound_status::ready)
+        cur = GrainSource{snd.data, (long)snd.channels, (double)snd.frames};
+    }
   }
   else if(inputs.sound && inputs.sound.channels() > 0)
   {
@@ -184,31 +152,25 @@ void Granola::operator()(tick t)
         inputs.sound.soundfile.data, (long)inputs.sound.channels(),
         (double)inputs.sound.frames()};
   }
-  if(!cur)
-    return;
 
-  // UI: the sound that plays, when it changes or a (re)created panel asks
+  // UI: whether the sound shown could be decoded, when that changes or a
+  // (re)created panel asks
   if(send_message)
   {
-    if(ui_refresh || cur_bank_idx != ui_sent_index || cur_bank_snd != ui_sent_sound
-       || snd_path_hash != ui_sent_path)
+    const auto status = cur_index >= 0 ? inputs.sounds[cur_index].status
+                        : cur          ? halp::sound_status::ready
+                                       : halp::sound_status::unloaded;
+    if(ui_refresh || cur_index != ui_sent_index || status != ui_sent_status)
     {
-      std::string_view name = cur_bank_snd ? std::string_view{cur_bank_snd->name}
-                                           : snd_path.substr(snd_path.find_last_of("/\\") + 1);
-      processor_to_ui msg{current_sound{}};
-      auto& cs = ossia::get<current_sound>(msg.message);
-      cs.index = cur_bank_idx;
-      const auto n = std::min(name.size(), sizeof(cs.name) - 1);
-      std::memcpy(cs.name, name.data(), n);
-      cs.name[n] = 0;
-      send_message(std::move(msg));
-
+      send_message(processor_to_ui{current_sound{cur_index, status}});
       ui_refresh = false;
-      ui_sent_index = cur_bank_idx;
-      ui_sent_sound = cur_bank_snd;
-      ui_sent_path = snd_path_hash;
+      ui_sent_index = cur_index;
+      ui_sent_status = status;
     }
   }
+
+  if(!cur)
+    return;
 
   const int n_channels = inputs.src_channels <= 0
                              ? std::min((int)cur.channels, NCHAN)
@@ -349,14 +311,19 @@ void Granola::operator()(tick t)
                                    (0., inputs.dur_j_r / 4)(rd) * inputs.dur_j;
           float rate;
           boost::container::static_vector<double, NCHAN> spawn_ampvec = ampvec;
-          // Per-grain source: random mode picks a fresh bank sound per grain.
+          // A grain of the folder pins its file, which then outlives changes
+          // of the folder; random mode picks a file per grain.
           GrainSource spawn_src = cur;
-          std::shared_ptr<const void> spawn_hold = cur_hold;
-          if(random_pick)
+          halp::sound_pin spawn_pin;
+          if(from_folder)
           {
-            const auto& rsnd = bank.sounds[rd() % bank.sounds.size()];
-            spawn_src = rsnd->view();
-            spawn_hold = rsnd;
+            const int idx = inputs.random ? random_ready_index() : cur_index;
+            if(idx >= 0)
+            {
+              const auto& snd = inputs.sounds[idx];
+              spawn_src = GrainSource{snd.data, (long)snd.channels, (double)snd.frames};
+              spawn_pin = inputs.sounds.pin(idx);
+            }
           }
           if(midi_active)
           {
@@ -392,7 +359,7 @@ void Granola::operator()(tick t)
           dur = std::max(dur, float(min_dur(rate)));
 
           grains[i].set(pos, dur, rate,
-              windcoef, spawn_ampvec, spawn_src, spawn_hold,
+              windcoef, spawn_ampvec, spawn_src, std::move(spawn_pin),
               inputs.loopmode, inputs.window_mode, ch_offset, n_channels);
           alloccheck = true;
         }
@@ -416,11 +383,6 @@ void Granola::operator()(tick t)
           for(int j = 0; j < nw; j++)
             outputs.audio.samples[j][k] += outSamps[j] * inputs.gain;
         }
-
-        // The grain is done: let go of its sound, but not here if it was the
-        // last one holding it.
-        if(!grains[i].m_active)
-          release(grains[i].m_source_hold);
 
         busyCount++;
       }

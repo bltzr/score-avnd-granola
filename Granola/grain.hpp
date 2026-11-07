@@ -11,6 +11,7 @@
 #include <boost/container/vector.hpp>
 #include <boost/dynamic_bitset.hpp>
 
+#include <halp/sound_set.hpp>
 #include <halp/soundfile_port.hpp>
 
 #include <cmath>
@@ -19,10 +20,10 @@
 
 #define NCHAN 8
 
-// Lightweight view over any per-channel sample storage (soundfile port,
-// sound-bank entry, ...). Grains capture one at spawn time together with a
-// shared_ptr hold keeping the storage alive for the grain's lifetime, so a
-// bank reload never pulls memory out from under a playing grain.
+// Lightweight view over any per-channel sample storage (soundfile port, file
+// of a sound set). Grains capture one at spawn time; those of a sound set also
+// pin the file, so a change of the folder never pulls memory out from under a
+// playing grain.
 struct GrainSource
 {
   const float* const* data{};
@@ -78,7 +79,7 @@ struct GranuGrain
       const boost::container::static_vector<double, 2>&
           shape_coef, // if one number then look for window, if two do shaping?, or add another inlet for
       const boost::container::static_vector<double, NCHAN>& amps,
-      const GrainSource& src, std::shared_ptr<const void> src_hold,
+      const GrainSource& src, halp::sound_pin pin,
       //const halp::soundfile_port<"Window">& wind_proxy, // future holder of optional window buffer
       //double sr,
       bool loopmode, long windowType, long channel_offset, long src_channels);
@@ -87,7 +88,7 @@ struct GranuGrain
   std::span<double> incr(long interpType);
 
   GrainSource m_source{};
-  std::shared_ptr<const void> m_source_hold{};
+  halp::sound_pin m_pin;
 
   void reset();
 
