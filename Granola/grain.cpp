@@ -36,8 +36,8 @@ void GranuGrain::reset()
   m_shape_x = 1.;
   m_shape_y = 1.;
   m_phase_counter = 0;
-  m_window.reserve(8192);
-  m_window_update.reserve(8192);
+  m_window.reserve(window_cache_size);
+  m_window_update.reserve(window_cache_size);
 }
 
 void GranuGrain::set(
@@ -130,9 +130,12 @@ void GranuGrain::set(
   if(prev_count != m_max_count || m_wind_type != windowType || m_shape != shape_coef)
   {
     m_shape = shape_coef;
+    // Within the capacity reserved in reset(): no allocation on the audio
+    // thread. The samples of longer grains past it are not cached.
+    const auto cached = std::min<long>(m_max_count + 1, window_cache_size);
     m_window_update.clear();
-    m_window_update.resize(m_max_count + 1);
-    m_window.resize(m_max_count + 1, boost::container::default_init);
+    m_window_update.resize(cached);
+    m_window.resize(cached, boost::container::default_init);
   }
 
   m_wind_type = windowType;
@@ -172,7 +175,8 @@ void GranuGrain::set(
 double GranuGrain::window(long phase_index)
 {
   phase_index = std::clamp(phase_index, (long)0, (long)m_max_count);
-  if(m_window_update.test(phase_index))
+  const bool cached = phase_index < (long)m_window_update.size();
+  if(cached && m_window_update.test(phase_index))
     return m_window[phase_index];
 
   auto win = [this] {
@@ -196,8 +200,11 @@ double GranuGrain::window(long phase_index)
     }
   }();
 
-  m_window[phase_index] = win;
-  m_window_update.set(phase_index);
+  if(cached)
+  {
+    m_window[phase_index] = win;
+    m_window_update.set(phase_index);
+  }
   return win;
 }
 

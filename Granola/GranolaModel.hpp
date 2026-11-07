@@ -49,6 +49,9 @@ public:
   // XY pad; shared with the window-shape widget in GranolaUi.hpp.
   static constexpr float wc_radius{64.};
 
+  // Grains made in prepare(): the most Max Voices can be
+  static constexpr int max_voices = 256;
+
   //static const int NCHAN{8};
 
   struct ins
@@ -104,7 +107,7 @@ public:
     struct : halp::spinbox_i32<"Channel Offset", halp::range{0, NCHAN - 1, 0}>
     {
     } channel_offset;
-    struct : halp::spinbox_i32<"Max Voices", halp::range{0, 256, 128}>
+    struct : halp::spinbox_i32<"Max Voices", halp::range{0, max_voices, 128}>
     {
       void update(Granola& self) { self.set_voice_count(value); }
     } num_voices;
@@ -277,7 +280,7 @@ public:
   void prepare(setup info);
 
   void resize(int n);
-  //! Grows or shrinks the grains, letting go of the sounds of those removed
+  //! Stops the grains past \p n, letting go of their sounds
   void set_voice_count(int n);
   void clear();
 
