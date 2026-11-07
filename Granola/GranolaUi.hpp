@@ -349,9 +349,9 @@ struct WaveformItem
       ctx.set_stroke_width(1.);
       ctx.stroke();
 
-      // jitter bands: position (±, symmetric) at the start edge; duration
-      // (add-only, one-sided) extending right from the end edge. Bands assume
-      // a jitter range of 1 (the audio uses the real *Jitter Range* ports).
+      // jitter bands, both symmetric (±): position at the start edge, duration
+      // at the end edge. Bands assume a jitter range of 1 (the audio uses the
+      // real *Jitter Range* ports).
       auto band = ctx.to_rgba(halp::colors::editable_value_light);
       band.a = 40;
       const double pj = pos_j / 2. * draw_w();
@@ -366,7 +366,7 @@ struct WaveformItem
       if(dj > 0.5)
       {
         ctx.begin_path();
-        ctx.draw_rect(x1, pad, dj, h - 2. * pad);
+        ctx.draw_rect(x1 - dj, pad, 2. * dj, h - 2. * pad);
         ctx.set_fill_color(band);
         ctx.fill();
       }
@@ -454,7 +454,7 @@ struct WaveformItem
     switch(m_zone)
     {
       case drag_zone::window: {
-        const float new_dur = std::clamp(m_dur0 + dyn, 0.01f, 1.f);
+        const float new_dur = std::clamp(m_dur0 + dyn, 1e-8f, 1.f);
         new_pos -= (new_dur - m_dur0) / 2.f;
         if(set_dur)
           set_dur(new_dur);

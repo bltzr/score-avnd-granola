@@ -290,18 +290,19 @@ void Granola::operator()(tick t)
 
   double density = inputs.density * (1 + dist(rd) * inputs.dens_j);
 
-  // Effective base duration for spawn timing. Two corrections that keep the
-  // active-grain count ~= Density at short durations and under jitter:
-  //  - clamp sub-minimum (stale / automated) values up to the slider minimum,
-  //    so Duration ~= 0 can't drop the spawn interval to 1 sample (which packs
-  //    ~64-sample grains back-to-back into a degenerate grain pile);
-  //  - add the mean of the add-only duration jitter. The jitter is
-  //    |N(0, DurJitterRange/4)| * DurJitter, whose mean is
-  //    (DurJitterRange/4)*sqrt(2/pi)*DurJitter ~= 0.2*DurJitterRange*DurJitter,
-  //    so the spawn rate tracks the AVERAGE jittered grain length.
-  const double dur_base = std::max((double)inputs.dur, 0.01);
-  const double eff_dur
-      = dur_base + 0.2 * (double)inputs.dur_j_r * (double)inputs.dur_j;
+  // The shortest grain, as a fraction of the sound at a given pitch: a time,
+  // not a part of the file, so that long files still give short grains. Two
+  // samples of the file at the least.
+  const double min_grain_samples = min_grain_seconds * samplerate;
+  const auto min_dur = [&](double rate) {
+    return std::max(min_grain_samples * std::abs(rate), 2.) / cur.frames;
+  };
+
+  // Duration for the spawn timing, clamped up to the shortest grain: else a
+  // Duration ~= 0 (stale or automated) drops the spawn interval to 1 sample and
+  // packs grains back-to-back up to the voice cap, and Density stops meaning
+  // anything.
+  const double eff_dur = std::max((double)inputs.dur, min_dur(inputs.rate));
 
   if (inputs.trig ) {
     trigger = true;
@@ -344,13 +345,8 @@ void Granola::operator()(tick t)
 
           float pos = inputs.pos + std::normal_distribution<float>
                                    (0., inputs.pos_j_r / 4)(rd) * inputs.pos_j;
-          // Duration jitter is add-only (grains only lengthen, never trip the
-          // "whole file" path GranuGrain::set reads for a <= 0 duration).
-          // dur_base is already clamped to the minimum.
-          float dur = dur_base
-                      + std::abs(std::normal_distribution<float>
-                                 (0., inputs.dur_j_r / 4)(rd) * inputs.dur_j);
-          dur = std::max(dur, 64.f / (float)cur.frames);
+          float dur = inputs.dur + std::normal_distribution<float>
+                                   (0., inputs.dur_j_r / 4)(rd) * inputs.dur_j;
           float rate;
           boost::container::static_vector<double, NCHAN> spawn_ampvec = ampvec;
           // Per-grain source: random mode picks a fresh bank sound per grain.
@@ -389,6 +385,11 @@ void Granola::operator()(tick t)
                                                  * ((inputs.reverse) ? -1 : 1);
             trigger = false;
           }
+
+          // Not shorter than the shortest grain: this also keeps the jitter
+          // from going under zero, which GranuGrain::set reads as the whole
+          // file.
+          dur = std::max(dur, float(min_dur(rate)));
 
           grains[i].set(pos, dur, rate,
               windcoef, spawn_ampvec, spawn_src, spawn_hold,

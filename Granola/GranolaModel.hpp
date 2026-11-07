@@ -52,6 +52,10 @@ public:
   // Grains made in prepare(): the most Max Voices can be
   static constexpr int max_voices = 256;
 
+  // Shortest grain: below about this, the window cannot take its shape. Short
+  // enough for pulsar-like timbres, whatever the length of the file.
+  static constexpr double min_grain_seconds = 0.0005;
+
   //static const int NCHAN{8};
 
   struct ins
@@ -71,7 +75,7 @@ public:
     halp::hslider_f32<"Position", halp::range{0.00000001, 1., 0.00000001}> pos;
     halp::hslider_f32<"Position Jitter", halp::range{0., 1., 0.}> pos_j;
     halp::knob_f32<"Position Jitter Range", halp::range{0., 1., 1.}> pos_j_r;
-    halp::hslider_f32<"Duration", halp::range{0.01, 1., 0.1}> dur;
+    halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 0.1}> dur;
     halp::hslider_f32<"Duration Jitter", halp::range{0., 1., 0.}> dur_j;
     halp::knob_f32<"Duration Jitter Range", halp::range{0., 1., 1.}> dur_j_r;
     struct : halp::knob_f32<"Pitch", halp::range{0.000001, 10., 1.}>
