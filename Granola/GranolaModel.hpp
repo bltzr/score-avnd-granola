@@ -1,6 +1,5 @@
 #pragma once
 
-#include "SoundBank.hpp"
 #include "grain.hpp"
 #include "utils.hpp"
 
@@ -13,7 +12,9 @@
 #include <halp/mappers.hpp>
 #include <halp/meta.hpp>
 #include <halp/midi.hpp>
+#include <halp/folder_combobox.hpp>
 #include <halp/sample_accurate_controls.hpp>
+#include <halp/sound_set.hpp>
 #include <libremidi/message.hpp>
 #include <rnd/random.hpp>
 
@@ -51,6 +52,11 @@ public:
 
   // Grains made in prepare(): the most Max Voices can be
   static constexpr int max_voices = 256;
+
+  // What the Folder source lists
+  static constexpr halp::static_string sound_extensions_lit{
+      "wav w64 aif aiff aifc caf flac mp3 ogg opus m4a"};
+  static constexpr std::string_view sound_extensions{sound_extensions_lit.value};
 
   // Shortest grain: below about this, the window cannot take its shape. Short
   // enough for pulsar-like timbres, whatever the length of the file.
@@ -130,18 +136,21 @@ public:
     halp::midi_bus<"MIDI In", libremidi::message> midi;
     halp::toggle<"listening to MIDI", halp::toggle_setup{.init = true}> midi_gate;
 
-    // --- Multifile bank. Appended at the end so pre-existing scenarios restore
-    // all earlier ports positionally. The Sound port's folder is scanned; this
-    // 0-based index (clipped) selects which file plays.
-    struct : halp::spinbox_i32<"Sound index", halp::range{0, 4096, 0}>
+    // --- Where the sound comes from. Appended at the end so pre-existing
+    // scenarios restore all earlier ports positionally.
+    struct
     {
-    } sound_index;
-    // When on, every grain picks a random bank sound (overrides Sound index).
+      halp__enum_combobox("Source", File, File, Folder)
+    } source;
+    // Folder source: the host lists, decodes and watches the folder
+    struct : halp::sound_set<"Sounds">
+    {
+      static constexpr std::string_view extensions() { return sound_extensions; }
+    } sounds;
+    // The file of the folder that plays, by name: adding files keeps it
+    halp::folder_combobox<"Sound in folder", "Sounds", sound_extensions_lit> sound_file;
+    // Every grain plays a random file of the folder instead
     halp::toggle<"Random"> random;
-    // Master gate for the bank. Off (default) = the single Sound-port file
-    // only (folder is not scanned); on = the multifile bank with index/random.
-    // Also drives the UI: off shows an "enable" button, on shows the picker.
-    halp::toggle<"Multiple sound support"> multi;
 
   } inputs;
 
@@ -172,11 +181,11 @@ public:
     uint8_t amp[max_heads];  // window amplitude, 0-255
     uint16_t pos[max_heads]; // position in the current sound, 0-65535
   };
-  // The sound that plays, for the picker.
+  // The state of the sound shown: whether it could be decoded yet.
   struct current_sound
   {
-    int32_t index;  // in the bank; -1 when the Sound port's file plays
-    char name[256]; // its file name
+    int32_t index; // in the folder; -1 when the Sound port's file plays
+    halp::sound_status status;
   };
   struct processor_to_ui
   {
@@ -192,10 +201,9 @@ public:
   void process_message(const ui_to_processor&) { ui_refresh = true; }
 
   bool ui_refresh{true};
-  // What the UI was last told: the bank sound, its index, the Sound port file
+  // What the UI was last told: the folder index and its state
   int ui_sent_index{-2};
-  const void* ui_sent_sound{};
-  std::size_t ui_sent_path{};
+  halp::sound_status ui_sent_status{};
   int ui_frame_counter{0}; // throttles the playheads
   bool ui_heads_shown{false};
 
@@ -224,58 +232,16 @@ public:
   bool midi_active{false};   // true when at least one MIDI note is held
   int midi_pending_voice{-1}; // index of next voice to spawn (-1 = none pending)
 
-  // --- Sound bank: scanned/decoded in a worker thread, swapped on the
-  // processing thread. Active grains keep their sound via shared_ptr holds.
-  // Nothing of it is allocated nor freed on the processing thread: the worker
-  // frees the banks that are replaced, and the sounds whose last hold a grain
-  // let go of.
-  SoundBank bank;
-  long bank_scan_phase{0};
-  bool bank_scan_inflight{false};
-  std::size_t last_sound_path{}; // hash: resets captured grains when the file changes
+  std::size_t last_sound_path{}; // hash: stops the grains of a replaced Sound file
 
-  //! Shared by the processing thread and the worker; made in prepare(). The
-  //! processing thread writes it only while no scan is in flight, the worker
-  //! only during one, and the task queue orders the two.
-  struct scan_state
-  {
-    std::string folder; // to scan; its capacity is reserved in prepare()
-    double rate{};
-    SoundBank last;     // the worker's last result: unchanged files are reused
-    SoundBank retired;  // the bank the last result replaced
-    std::vector<std::shared_ptr<const void>> released; // sounds grains let go of
-  };
-  std::shared_ptr<scan_state> scan;
+  // The folder file the Sound in folder names, looked up again only when the
+  // folder or the name changes
+  int folder_index{-1};
+  uint64_t folder_index_generation{};
+  std::size_t folder_index_name{};
+  int find_folder_index();
+  int random_ready_index();
 
-  // Sounds a grain held last, kept until the next scan frees them
-  boost::container::static_vector<std::shared_ptr<const void>, 256> released;
-  void release(std::shared_ptr<const void>& hold) noexcept;
-
-  // A scan's result, applied on the processing thread. Not a std::function:
-  // it travels inline in the execution command, and the bank it replaces goes
-  // back to the worker to be freed.
-  struct apply_scan
-  {
-    SoundBank bank;
-    explicit operator bool() const noexcept { return true; }
-    void operator()(Granola& self) noexcept;
-  };
-
-  struct worker_t
-  {
-    std::function<void(std::shared_ptr<scan_state>)> request;
-
-    static apply_scan work(std::shared_ptr<scan_state> st)
-    {
-      // What the processing thread is done with is freed here
-      st->retired = {};
-      st->released.clear();
-      st->last = scan_folder(st->folder, st->rate, st->last);
-      return apply_scan{st->last};
-    }
-  } worker;
-
-  void request_scan();
   void send_playheads(int frames, const GrainSource& cur);
 
   // t_critical  lock; // is there an equivalent?
@@ -284,7 +250,7 @@ public:
   void prepare(setup info);
 
   void resize(int n);
-  //! Stops the grains past \p n, letting go of their sounds
+  //! Stops the grains past \p n
   void set_voice_count(int n);
   void clear();
 

@@ -251,8 +251,10 @@ struct WaveformItem
   // Drawn by the host from the file itself, see halp::waveform_view
   halp::waveform_view waveform;
   std::string name;
-  // Where the grains of the shown sound read, from the processor
+  // Where the grains of the shown sound read, and whether it could be decoded,
+  // from the processor
   Granola::playheads heads{};
+  halp::sound_status status{halp::sound_status::ready};
 
   // control values, synced in ui::on_control_update
   float pos{}, pos_j{}, dur{}, dur_j{};
@@ -261,10 +263,12 @@ struct WaveformItem
   // wired in ui::bus::init to the pos/dur/jitter ports' document values
   std::function<void(float)> set_pos, set_dur, set_pos_j, set_dur_j;
 
-  // The Sound file's path, synced in on_control_update
+  // The Sound file's path, and whether the folder was the source, synced in
+  // on_control_update (the ui struct itself only holds widgets)
   std::string sound_path;
+  bool was_folder{};
 
-  // The file shown: the Sound file, or the bank's current one in multi mode
+  // The file shown: the Sound file, or the file picked in the folder
   void show_file(const std::string& path)
   {
     if(waveform.file == path)
@@ -277,28 +281,18 @@ struct WaveformItem
   }
   bool has_sound() const noexcept { return waveform.ready; }
 
-  // Drop a sound onto the waveform: a file loads it; a folder enables multi
-  // mode and anchors on its first audio file. (Needs the score-core drop
-  // forwarding in Crousti/Painter.hpp.)
-  std::function<void(std::string)> set_sound;
-  std::function<void(bool)> set_multi;
+  // Drop onto the waveform: a file plays it, a folder plays its files.
+  // Wired in ui::bus::init.
+  std::function<void(std::string)> set_sound, set_folder;
   bool drop(const std::vector<std::string>& paths)
   {
     if(paths.empty())
       return false;
     const QFileInfo fi(QString::fromStdString(paths[0]));
-    static const QStringList exts{"*.wav", "*.aif", "*.aiff", "*.flac",
-                                  "*.mp3", "*.ogg",  "*.m4a"};
     if(fi.isDir())
     {
-      QDir dir(fi.absoluteFilePath());
-      const auto files = dir.entryList(exts, QDir::Files, QDir::Name);
-      if(files.isEmpty())
-        return false;
-      if(set_multi)
-        set_multi(true);
-      if(set_sound)
-        set_sound(dir.filePath(files[0]).toStdString());
+      if(set_folder)
+        set_folder(fi.absoluteFilePath().toStdString());
       return true;
     }
     if(set_sound)
@@ -387,7 +381,11 @@ struct WaveformItem
     }
 
     char label[256];
-    if(!name.empty() && waveform.duration > 0.)
+    if(!name.empty() && status == halp::sound_status::failed)
+      std::snprintf(label, sizeof(label), "%s  (cannot be decoded)", name.c_str());
+    else if(!name.empty() && status != halp::sound_status::ready)
+      std::snprintf(label, sizeof(label), "%s  (loading)", name.c_str());
+    else if(!name.empty() && waveform.duration > 0.)
       std::snprintf(
           label, sizeof(label), "%s  (%.2f s)", name.c_str(), waveform.duration);
     else if(!name.empty())
@@ -483,141 +481,6 @@ struct WaveformItem
   }
 };
 
-// --- Sound-source controls, gated by the "Multiple sound support" toggle.
-// When off: only the enable button shows (click -> turns multi on). When on:
-// the file picker + random toggle show. `multi` and `folder` are synced from
-// the ports in on_control_update; each widget's `set` drives its bound port.
-
-// Bound to the multi toggle: the enable button (off) / mono affordance (on).
-struct MultiButton
-{
-  static constexpr double width() { return 110.; }
-  static constexpr double height() { return 20.; }
-
-  bool value{false}; // multi toggle
-  std::function<void(bool)> set;
-  std::function<void()> update;
-
-  void paint(auto ctx)
-  {
-    if(!value)
-    {
-      ctx.begin_path();
-      ctx.set_fill_color(halp::colors::background_darker);
-      ctx.draw_rounded_rect(0., 0., width(), height(), 3.);
-      ctx.fill();
-      ctx.begin_path();
-      ctx.set_fill_color({255, 255, 255, 255});
-      ctx.set_font_size(9.);
-      ctx.draw_text(6., 14., "multiple sound support");
-      ctx.fill();
-    }
-    else
-    {
-      ctx.begin_path();
-      ctx.set_fill_color(halp::colors::mid);
-      ctx.set_font_size(8.);
-      ctx.draw_text(2., 13., "multi ✓  (click → mono)");
-      ctx.fill();
-    }
-  }
-
-  bool mouse_press(double, double)
-  {
-    if(set)
-      set(!value);
-    return true;
-  }
-};
-
-// Bound to the Sound index port. Lists the folder's files (from the sound
-// path, synced UI-side so it works in edit mode); click opens a file menu.
-// Hidden when multi is off.
-struct SoundPickerItem
-{
-  static constexpr double width() { return 160.; }
-  static constexpr double height() { return 20.; }
-
-  std::string folder;       // containing folder (from the bus)
-  std::string current_file; // current sound basename (from the bus)
-  int value{0};             // Sound index (synced)
-  bool multi{false};        // synced from the multi toggle
-  bool m_prev_multi{false}; // to catch the multi off->on transition
-  std::function<void(int)> set;
-  std::function<void()> update;
-
-  // The folder's audio files. Listed when the folder changes and when the
-  // menu opens, not at each repaint.
-  const std::vector<std::string>& files()
-  {
-    if(m_listed_folder != folder)
-      rescan();
-    return m_files;
-  }
-  void rescan()
-  {
-    m_listed_folder = folder;
-    m_files.clear();
-    if(folder.empty())
-      return;
-    static const QStringList exts{"*.wav", "*.aif", "*.aiff", "*.flac",
-                                  "*.mp3", "*.ogg",  "*.m4a"};
-    QDir dir(QString::fromStdString(folder));
-    for(const auto& f : dir.entryList(exts, QDir::Files, QDir::Name))
-      m_files.push_back(f.toStdString());
-  }
-  //! The file at the selected index, or empty
-  std::string selected_file()
-  {
-    const auto& fl = files();
-    return (value >= 0 && value < (int)fl.size()) ? fl[value] : std::string{};
-  }
-  std::vector<std::string> m_files;
-  std::string m_listed_folder;
-
-  void paint(auto ctx)
-  {
-    if(!multi)
-      return;
-    ctx.begin_path();
-    ctx.set_fill_color(halp::colors::background_darker);
-    ctx.draw_rounded_rect(0., 0., width(), height(), 2.);
-    ctx.fill();
-
-    const auto& fl = files();
-    const char* label = fl.empty() ? "(no folder)"
-                        : (value >= 0 && value < (int)fl.size()) ? fl[value].c_str()
-                                                                 : "-";
-    ctx.begin_path();
-    ctx.set_fill_color({255, 255, 255, 255});
-    ctx.set_font_size(9.);
-    ctx.draw_text(4., 14., label);
-    ctx.fill();
-  }
-
-  bool mouse_press(double, double)
-  {
-    if(!multi)
-      return false;
-    rescan();
-    const auto& fl = files();
-    if(fl.empty())
-      return true;
-    QMenu menu;
-    for(int i = 0; i < (int)fl.size(); i++)
-    {
-      auto* a = menu.addAction(QString::fromStdString(fl[i]));
-      a->setCheckable(true);
-      a->setChecked(i == value);
-      a->setData(i);
-    }
-    if(auto* chosen = menu.exec(QCursor::pos()))
-      if(set)
-        set(chosen->data().toInt());
-    return true;
-  }
-};
-
 // Small static text label with a controllable baseline (a halp::label's
 // vertical placement can't be nudged). Used for "win modes".
 struct WinModesLabel
@@ -672,16 +535,46 @@ struct Granola::ui
     halp::custom_actions_item<WaveformItem> waveform;
   } wave_box;
 
-  // Sound-source row (below the waveform): the multi enable button, and (when
-  // multi is on) the file picker + random toggle.
-  struct
+  // Where the sound comes from (below the waveform): the Sound file above, or
+  // a folder of sounds, with a page of controls per source. Named structs: the
+  // pages hold a static member.
+  struct source_box_t
   {
     halp_meta(name, "Source")
     halp_meta(layout, hbox)
     halp_meta(background, background_dark)
-    halp::custom_control<MultiButton, &ins::multi> multi_btn;
-    halp::custom_control<SoundPickerItem, &ins::sound_index> picker;
-    halp::item<&ins::random> random;
+    struct : halp::control<&ins::source>
+    {
+      std::function<void(control_value_type)> set;
+    } source;
+
+    struct pages_t
+    {
+      halp_meta(name, "Source pages")
+      halp_meta(layout, tabs)
+      halp_flag(hide_tabs);
+      static constexpr auto model = &ins::source;
+      struct
+      {
+        halp_meta(name, "File")
+        halp_meta(layout, hbox)
+        halp::label hint{"the sound file above, or drop one on the waveform"};
+      } file;
+      struct
+      {
+        halp_meta(name, "Folder")
+        halp_meta(layout, hbox)
+        struct : halp::control<&ins::sounds>
+        {
+          std::function<void(control_value_type)> set;
+        } folder;
+        struct : halp::control<&ins::sound_file>
+        {
+          std::function<void(control_value_type)> set;
+        } sound_file;
+        halp::item<&ins::random> random;
+      } folder;
+    } pages;
   } source_box;
 
   struct
@@ -764,52 +657,43 @@ struct Granola::ui
     if(wf.update)
       wf.update();
 
-    // Sound-source row: the multi toggle gates the picker + random; the picker
-    // lists the Sound path's parent folder.
-    const bool m = source_box.multi_btn.value;
-    auto& pk = source_box.picker;
-    pk.multi = m;
-    // Edit-mode: derive the picker's folder + current file from the Sound path
-    // (score resolves it to an absolute path since the Layer.hpp fix); the bus
-    // keeps both precise during execution. Enabling multi keeps the current
-    // file selected instead of jumping to index 0.
-    if(const std::string& sp = ports.sound.value; !sp.empty())
+    // Switching to the folder the first time: the Sound file's folder, with
+    // that file picked, rather than an empty folder.
+    auto& src = source_box;
+    auto& page = src.pages.folder;
+    const bool folder = from_folder();
+    if(folder && !wf.was_folder && page.folder.value.empty() && !wf.sound_path.empty())
     {
-      const QFileInfo fi(QString::fromStdString(sp));
-      pk.folder = fi.absolutePath().toStdString();
-      if(pk.current_file.empty())
-        pk.current_file = fi.fileName().toStdString();
+      const QFileInfo fi(QString::fromStdString(wf.sound_path));
+      if(page.folder.set)
+        page.folder.set(fi.absolutePath().toStdString());
+      if(page.sound_file.set)
+        page.sound_file.set(fi.fileName().toStdString());
     }
-    if(m && !pk.m_prev_multi && !pk.folder.empty())
-    {
-      const auto& files = pk.files();
-      for(int i = 0; i < (int)files.size(); i++)
-        if(files[i] == pk.current_file)
-        {
-          if(pk.set)
-            pk.set(i);
-          break;
-        }
-    }
-    pk.m_prev_multi = m;
-    if(pk.update)
-      pk.update();
-    if(source_box.multi_btn.update)
-      source_box.multi_btn.update();
+    wf.was_folder = folder;
 
     show_current_sound();
   }
 
-  // The waveform shows the Sound file, or in multi mode the file picked in the
-  // folder, the one the picker shows.
+  bool from_folder() const noexcept
+  {
+    using source_type = std::decay_t<decltype(source_box.source.value)>;
+    return source_box.source.value == source_type::Folder;
+  }
+
+  // The waveform shows the Sound file, or the file picked in the folder
   void show_current_sound()
   {
     auto& wf = wave_box.waveform;
-    auto& pk = source_box.picker;
+    auto& page = source_box.pages.folder;
     std::string file = wf.sound_path;
-    if(pk.multi && !pk.folder.empty())
-      if(auto sel = pk.selected_file(); !sel.empty())
-        file = pk.folder + "/" + sel;
+    if(from_folder())
+    {
+      file.clear();
+      if(!page.folder.value.empty() && !page.sound_file.value.empty()
+         && page.sound_file.value != "-")
+        file = page.folder.value + "/" + page.sound_file.value;
+    }
     wf.show_file(file);
   }
 
@@ -838,14 +722,19 @@ struct Granola::ui
         if(auto& c = self.ports.dur_jit; c.set)
           c.set(v);
       };
-      // Drop onto the waveform -> load the Sound port / enable multi.
+      // Drop onto the waveform: a file plays it, a folder plays its files
+      using source_type = std::decay_t<decltype(self.source_box.source.value)>;
       wf.set_sound = [&self](std::string v) {
         if(auto& c = self.ports.sound; c.set)
           c.set(std::move(v));
+        if(auto& c = self.source_box.source; c.set)
+          c.set(source_type::File);
       };
-      wf.set_multi = [&self](bool v) {
-        if(auto& c = self.source_box.multi_btn; c.set)
-          c.set(v);
+      wf.set_folder = [&self](std::string v) {
+        if(auto& c = self.source_box.pages.folder.folder; c.set)
+          c.set(std::move(v));
+        if(auto& c = self.source_box.source; c.set)
+          c.set(source_type::Folder);
       };
       // A late-created panel asks the processor to resend the current sound.
       send_message(ui_to_processor{});
@@ -868,18 +757,10 @@ struct Granola::ui
 
     static void process(ui& self, const current_sound& cs)
     {
-      auto& pk = self.source_box.picker;
-      pk.current_file = cs.name;
-      // A bank file the listing does not have: the folder changed on disk
-      if(cs.index >= 0)
-      {
-        const auto& fl = pk.files();
-        if(std::find(fl.begin(), fl.end(), pk.current_file) == fl.end())
-          pk.rescan();
-      }
-      if(pk.update)
-        pk.update();
-      self.show_current_sound();
+      auto& wf = self.wave_box.waveform;
+      wf.status = cs.status;
+      if(wf.update)
+        wf.update();
     }
   };
 };
