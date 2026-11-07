@@ -3,6 +3,11 @@
 
 #include <boost/container/static_vector.hpp>
 
+#include <algorithm>
+#include <cstring>
+#include <functional>
+#include <string_view>
+
 namespace Granola
 {
 
@@ -16,34 +21,110 @@ void Granola::prepare(setup info)
   grains.reserve(256);
   resize(inputs.num_voices);
 
+  if(!scan)
+  {
+    scan = std::make_shared<scan_state>();
+    // Written on the processing thread: no allocation there for any folder
+    // path shorter than this.
+    scan->folder.reserve(4096);
+    scan->released.reserve(released.capacity());
+  }
+
   if(inputs.multi)
     request_scan();
 }
 
 void Granola::request_scan()
 {
-  if(bank_scan_inflight)
+  if(bank_scan_inflight || !scan)
     return;
   bank_scan_inflight = true;
-  auto rq = std::make_shared<scan_request>();
-  rq->folder = std::string(inputs.sound.soundfile.filename);
-  rq->rate = samplerate;
-  rq->previous = bank;
-  worker.request(std::move(rq));
+
+  // No scan is in flight: the worker does not touch the state now.
+  scan->folder.assign(inputs.sound.soundfile.filename);
+  scan->rate = samplerate;
+  for(auto& h : released)
+    scan->released.push_back(std::move(h));
+  released.clear();
+
+  worker.request(scan);
+}
+
+void Granola::apply_scan::operator()(Granola& self) noexcept
+{
+  std::swap(self.bank, bank);
+  // The bank replaced goes back to the worker, which frees it at its next scan
+  if(self.scan)
+    self.scan->retired = std::move(bank);
+  self.bank_scan_inflight = false;
+}
+
+void Granola::release(std::shared_ptr<const void>& hold) noexcept
+{
+  // The last hold of a sound that left the bank: freeing it would happen here,
+  // on the processing thread. It is kept for the worker instead.
+  if(hold && hold.use_count() == 1 && released.size() < released.capacity())
+    released.push_back(std::move(hold));
+  hold.reset();
 }
 
 void Granola::resize(int n)
 {
   buf_soft_lock = true; /// TODO: use a mutex or something?
-  grains.resize(n);
+  set_voice_count(n);
   clear();
   buf_soft_lock = false;
+}
+
+void Granola::set_voice_count(int n)
+{
+  n = std::max(n, 0);
+  for(std::size_t i = n; i < grains.size(); i++)
+    release(grains[i].m_source_hold);
+  // Within the capacity reserved in prepare(): no allocation on the audio thread
+  grains.resize(n);
 }
 
 void Granola::clear()
 {
   for(auto& grain : grains)
+  {
     grain.reset();
+    release(grain.m_source_hold);
+  }
+}
+
+void Granola::send_playheads(int frames, const GrainSource& cur)
+{
+  if(!send_message)
+    return;
+
+  // ~30 messages per second is plenty for display
+  ui_frame_counter += frames;
+  if(ui_frame_counter < samplerate / 30.f)
+    return;
+  ui_frame_counter = 0;
+
+  processor_to_ui msg{playheads{}};
+  auto& ph = ossia::get<playheads>(msg.message);
+  ph.count = 0;
+  for(long i = 0; i < inputs.num_voices && i < (long)grains.size(); i++)
+  {
+    const auto& g = grains[i];
+    // Only the grains of the sound that is shown: random mode plays others
+    if(!g.m_active || g.m_source.data != cur.data)
+      continue;
+    ph.pos[ph.count] = std::lround(g.position() * 65535.);
+    ph.amp[ph.count] = std::lround(CLAMP(g.m_last_win, 0., 1.) * 255.);
+    if(++ph.count == playheads::max_heads)
+      break;
+  }
+
+  // Nothing plays: one empty message clears the playheads, then nothing
+  if(ph.count == 0 && !ui_heads_shown)
+    return;
+  ui_heads_shown = ph.count > 0;
+  send_message(std::move(msg));
 }
 
 void Granola::operator()(tick t)
@@ -55,9 +136,10 @@ void Granola::operator()(tick t)
   // capture the current one. (Bank grains hold their sound, but a file change
   // also means a folder change, so the reset is harmless there too.)
   const std::string_view snd_path = inputs.sound.soundfile.filename;
-  if(snd_path != last_sound_path)
+  const std::size_t snd_path_hash = std::hash<std::string_view>{}(snd_path);
+  if(snd_path_hash != last_sound_path)
   {
-    last_sound_path = snd_path;
+    last_sound_path = snd_path_hash;
     clear();
   }
 
@@ -76,11 +158,13 @@ void Granola::operator()(tick t)
   GrainSource cur{};
   std::shared_ptr<const void> cur_hold{};
   const BankSound* cur_bank_snd = nullptr;
+  int cur_bank_idx = -1;
   const bool random_pick = inputs.multi && !bank.sounds.empty() && inputs.random;
   if(inputs.multi && !bank.sounds.empty())
   {
     const int N = (int)bank.sounds.size();
     const int idx = random_pick ? 0 : CLAMP(inputs.sound_index.value, 0, N - 1);
+    cur_bank_idx = idx;
     cur = bank.sounds[idx]->view();
     cur_hold = bank.sounds[idx];
     cur_bank_snd = bank.sounds[idx].get();
@@ -94,47 +178,26 @@ void Granola::operator()(tick t)
   if(!cur)
     return;
 
-  // Waveform UI: ship the current sound's envelope when it changes (bank entry
-  // or mono file) or a freshly (re)created panel asks for a refresh.
+  // UI: the sound that plays, when it changes or a (re)created panel asks
   if(send_message)
   {
-    const std::string_view cur_name
-        = cur_bank_snd ? std::string_view(cur_bank_snd->name) : snd_path;
-    const int64_t cur_mtime = cur_bank_snd ? cur_bank_snd->mtime : 0;
-    if(ui_refresh || ui_sound_name != cur_name || ui_sound_mtime != cur_mtime)
+    if(ui_refresh || cur_bank_idx != ui_sent_index || cur_bank_snd != ui_sent_sound
+       || snd_path_hash != ui_sent_path)
     {
-      processor_to_ui msg;
-      // The UI can't read the soundfile port's path, so ship the folder +
-      // basename for the picker / current-file selection.
-      const QFileInfo fi(QString::fromStdString(std::string(snd_path)));
-      msg.folder = fi.absolutePath().toStdString();
-      msg.name = cur_bank_snd ? std::string(cur_bank_snd->name)
-                              : fi.fileName().toStdString();
-      if(cur_bank_snd)
-      {
-        msg.min_peaks = cur_bank_snd->min_peaks;
-        msg.max_peaks = cur_bank_snd->max_peaks;
-        msg.duration_s = cur_bank_snd->duration_s;
-      }
-      else
-      {
-        // mono: recompute the envelope from the Sound port when the file changes
-        if(mono_peaks_path != snd_path)
-        {
-          compute_peaks_raw(
-              inputs.sound.soundfile.data, (int)inputs.sound.channels(),
-              (int64_t)inputs.sound.frames(), samplerate, mono_min_peaks,
-              mono_max_peaks, mono_duration_s);
-          mono_peaks_path = std::string(snd_path);
-        }
-        msg.min_peaks = mono_min_peaks;
-        msg.max_peaks = mono_max_peaks;
-        msg.duration_s = mono_duration_s;
-      }
+      std::string_view name = cur_bank_snd ? std::string_view{cur_bank_snd->name}
+                                           : snd_path.substr(snd_path.find_last_of("/\\") + 1);
+      processor_to_ui msg{current_sound{}};
+      auto& cs = ossia::get<current_sound>(msg.message);
+      cs.index = cur_bank_idx;
+      const auto n = std::min(name.size(), sizeof(cs.name) - 1);
+      std::memcpy(cs.name, name.data(), n);
+      cs.name[n] = 0;
       send_message(std::move(msg));
+
       ui_refresh = false;
-      ui_sound_name = cur_name;
-      ui_sound_mtime = cur_mtime;
+      ui_sent_index = cur_bank_idx;
+      ui_sent_sound = cur_bank_snd;
+      ui_sent_path = snd_path_hash;
     }
   }
 
@@ -344,6 +407,11 @@ void Granola::operator()(tick t)
             outputs.audio.samples[j][k] += outSamps[j] * inputs.gain;
         }
 
+        // The grain is done: let go of its sound, but not here if it was the
+        // last one holding it.
+        if(!grains[i].m_active)
+          release(grains[i].m_source_hold);
+
         busyCount++;
       }
 
@@ -383,6 +451,8 @@ void Granola::operator()(tick t)
   }
 
   outputs.active_grains = busyCount;
+
+  send_playheads(t.frames, cur);
 
   //qDebug() << "Busy count:" << busyCount << " / density: " << density << " / " << inputs.density;
 

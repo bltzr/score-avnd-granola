@@ -2,14 +2,14 @@
 #include <Granola/GranolaModel.hpp>
 #include <halp/custom_widgets.hpp>
 #include <halp/layout.hpp>
-
-#include <Media/AudioDecoder.hpp>
+#include <halp/waveform_view.hpp>
 
 #include <QCursor>
 #include <QDir>
 #include <QFileInfo>
 #include <QMenu>
 
+#include <algorithm>
 #include <cfloat>
 #include <cstdio>
 
@@ -248,9 +248,11 @@ struct WaveformItem
   static constexpr double pad = 2.;
   static constexpr double left_pad = pad;
 
-  std::vector<float> min_peaks, max_peaks;
+  // Drawn by the host from the file itself, see halp::waveform_view
+  halp::waveform_view waveform;
   std::string name;
-  float duration_s{};
+  // Where the grains of the shown sound read, from the processor
+  Granola::playheads heads{};
 
   // control values, synced in ui::on_control_update
   float pos{}, pos_j{}, dur{}, dur_j{};
@@ -259,33 +261,21 @@ struct WaveformItem
   // wired in ui::bus::init to the pos/dur/jitter ports' document values
   std::function<void(float)> set_pos, set_dur, set_pos_j, set_dur_j;
 
-  // Mono edit-mode display: the Sound file's path (from the sound chip, synced
-  // in on_control_update). When it changes, decode UI-side so the waveform
-  // shows before playback; during execution the processor's bus peaks arrive.
-  std::string sound_path, m_loaded_path;
-  void reload_from_path()
+  // The Sound file's path, synced in on_control_update
+  std::string sound_path;
+
+  // The file shown: the Sound file, or the bank's current one in multi mode
+  void show_file(const std::string& path)
   {
-    if(sound_path == m_loaded_path)
+    if(waveform.file == path)
       return;
-    m_loaded_path = sound_path;
-    const QFileInfo fi(QString::fromStdString(sound_path));
-    if(sound_path.empty() || !fi.isFile())
-      return; // a folder or nothing: leave the bus-supplied peaks in place
-    if(auto dec
-       = Media::AudioDecoder::decode_synchronous(fi.absoluteFilePath(), 44100))
-    {
-      auto& d = dec->second;
-      std::vector<const float*> ptrs;
-      for(auto& ch : d)
-        ptrs.push_back(ch.data());
-      compute_peaks_raw(
-          ptrs.data(), (int)ptrs.size(), (int64_t)(d.empty() ? 0 : d[0].size()),
-          44100., min_peaks, max_peaks, duration_s);
-      name = fi.fileName().toStdString();
-      if(update)
-        update();
-    }
+    waveform.file = path;
+    const auto slash = path.find_last_of("/\\");
+    name = slash == std::string::npos ? path : path.substr(slash + 1);
+    if(update)
+      update();
   }
+  bool has_sound() const noexcept { return waveform.ready; }
 
   // Drop a sound onto the waveform: a file loads it; a folder enables multi
   // mode and anchors on its first audio file. (Needs the score-core drop
@@ -332,8 +322,6 @@ struct WaveformItem
   void paint(auto ctx)
   {
     constexpr double w = width(), h = height();
-    const double mid = h / 2.;
-    const double yscale = (h / 2.) - pad;
 
     // Inset by pad to match score::GraphicsLayout's own background rect.
     ctx.begin_path();
@@ -341,25 +329,11 @@ struct WaveformItem
     ctx.draw_rounded_rect(pad, pad, w - 2. * pad, h - 2. * pad, 3.);
     ctx.fill();
 
-    if(!min_peaks.empty() && min_peaks.size() == max_peaks.size())
-    {
-      const std::size_t N = min_peaks.size();
-      const double dx = draw_w() / N;
-      ctx.begin_path();
-      ctx.move_to(left_pad, mid - max_peaks[0] * yscale);
-      for(std::size_t i = 1; i < N; i++)
-        ctx.line_to(left_pad + i * dx, mid - max_peaks[i] * yscale);
-      for(std::size_t i = N; i-- > 0;)
-        ctx.line_to(left_pad + i * dx, mid - min_peaks[i] * yscale);
-      ctx.close_path();
-      auto env = ctx.to_rgba(halp::colors::runtime_value_dark);
-      env.a = 180;
-      ctx.set_fill_color(env);
-      ctx.fill();
-      ctx.set_stroke_color(halp::colors::runtime_value_mid);
-      ctx.set_stroke_width(1.);
-      ctx.stroke();
+    if constexpr(requires { ctx.draw_waveform(waveform, 0., 0., 1., 1.); })
+      ctx.draw_waveform(waveform, left_pad, pad, draw_w(), h - 2. * pad);
 
+    if(has_sound())
+    {
       const double x0 = win_x0();
       const double x1 = win_x1();
       ctx.begin_path();
@@ -396,11 +370,26 @@ struct WaveformItem
         ctx.set_fill_color(band);
         ctx.fill();
       }
+
+      // One bar per playing grain, fading with the grain's window
+      auto head = ctx.to_rgba(halp::colors::runtime_value_light);
+      ctx.set_stroke_width(1.);
+      for(int i = 0; i < heads.count; i++)
+      {
+        const double px = left_pad + heads.pos[i] / 65535. * draw_w();
+        head.a = uint8_t(64 + heads.amp[i] * 191 / 255);
+        ctx.begin_path();
+        ctx.set_stroke_color(head);
+        ctx.move_to(px, pad);
+        ctx.line_to(px, h - pad);
+        ctx.stroke();
+      }
     }
 
     char label[256];
-    if(!name.empty() && duration_s > 0.f)
-      std::snprintf(label, sizeof(label), "%s  (%.2f s)", name.c_str(), duration_s);
+    if(!name.empty() && waveform.duration > 0.)
+      std::snprintf(
+          label, sizeof(label), "%s  (%.2f s)", name.c_str(), waveform.duration);
     else if(!name.empty())
       std::snprintf(label, sizeof(label), "%s", name.c_str());
     else
@@ -426,7 +415,7 @@ struct WaveformItem
 
   bool mouse_press(double x, double y)
   {
-    if(min_peaks.empty())
+    if(!has_sound())
       return false; // no sound: nothing to manipulate
 
     m_press_x = x;
@@ -557,18 +546,34 @@ struct SoundPickerItem
   std::function<void(int)> set;
   std::function<void()> update;
 
-  std::vector<std::string> files() const
+  // The folder's audio files. Listed when the folder changes and when the
+  // menu opens, not at each repaint.
+  const std::vector<std::string>& files()
   {
-    std::vector<std::string> out;
+    if(m_listed_folder != folder)
+      rescan();
+    return m_files;
+  }
+  void rescan()
+  {
+    m_listed_folder = folder;
+    m_files.clear();
     if(folder.empty())
-      return out;
+      return;
     static const QStringList exts{"*.wav", "*.aif", "*.aiff", "*.flac",
                                   "*.mp3", "*.ogg",  "*.m4a"};
     QDir dir(QString::fromStdString(folder));
     for(const auto& f : dir.entryList(exts, QDir::Files, QDir::Name))
-      out.push_back(f.toStdString());
-    return out;
+      m_files.push_back(f.toStdString());
   }
+  //! The file at the selected index, or empty
+  std::string selected_file()
+  {
+    const auto& fl = files();
+    return (value >= 0 && value < (int)fl.size()) ? fl[value] : std::string{};
+  }
+  std::vector<std::string> m_files;
+  std::string m_listed_folder;
 
   void paint(auto ctx)
   {
@@ -579,7 +584,7 @@ struct SoundPickerItem
     ctx.draw_rounded_rect(0., 0., width(), height(), 2.);
     ctx.fill();
 
-    const auto fl = files();
+    const auto& fl = files();
     const char* label = fl.empty() ? "(no folder)"
                         : (value >= 0 && value < (int)fl.size()) ? fl[value].c_str()
                                                                  : "-";
@@ -594,7 +599,8 @@ struct SoundPickerItem
   {
     if(!multi)
       return false;
-    const auto fl = files();
+    rescan();
+    const auto& fl = files();
     if(fl.empty())
       return true;
     QMenu menu;
@@ -754,8 +760,7 @@ struct Granola::ui
     wf.pos_j = ports.pos_jit.value;
     wf.dur = ports.duration.value;
     wf.dur_j = ports.dur_jit.value;
-    wf.sound_path = ports.sound.value; // mono edit-mode display
-    wf.reload_from_path();
+    wf.sound_path = ports.sound.value;
     if(wf.update)
       wf.update();
 
@@ -777,7 +782,7 @@ struct Granola::ui
     }
     if(m && !pk.m_prev_multi && !pk.folder.empty())
     {
-      const auto files = pk.files();
+      const auto& files = pk.files();
       for(int i = 0; i < (int)files.size(); i++)
         if(files[i] == pk.current_file)
         {
@@ -791,6 +796,21 @@ struct Granola::ui
       pk.update();
     if(source_box.multi_btn.update)
       source_box.multi_btn.update();
+
+    show_current_sound();
+  }
+
+  // The waveform shows the Sound file, or in multi mode the file picked in the
+  // folder, the one the picker shows.
+  void show_current_sound()
+  {
+    auto& wf = wave_box.waveform;
+    auto& pk = source_box.picker;
+    std::string file = wf.sound_path;
+    if(pk.multi && !pk.folder.empty())
+      if(auto sel = pk.selected_file(); !sel.empty())
+        file = pk.folder + "/" + sel;
+    wf.show_file(file);
   }
 
   struct bus
@@ -827,28 +847,39 @@ struct Granola::ui
         if(auto& c = self.source_box.multi_btn; c.set)
           c.set(v);
       };
-      // A late-created panel asks the processor to resend the envelope.
+      // A late-created panel asks the processor to resend the current sound.
       send_message(ui_to_processor{});
     }
 
     // processor -> ui
     static void process_message(ui& self, processor_to_ui msg)
     {
+      ossia_variant_alias::visit(
+          [&self](const auto& m) { process(self, m); }, msg.message);
+    }
+
+    static void process(ui& self, const playheads& heads)
+    {
       auto& wf = self.wave_box.waveform;
-      wf.min_peaks = std::move(msg.min_peaks);
-      wf.max_peaks = std::move(msg.max_peaks);
-      wf.name = msg.name;
-      wf.duration_s = msg.duration_s;
+      wf.heads = heads;
       if(wf.update)
         wf.update();
+    }
 
-      // The soundfile port's path isn't visible to the UI, so the picker takes
-      // its folder + current file from the processor here.
+    static void process(ui& self, const current_sound& cs)
+    {
       auto& pk = self.source_box.picker;
-      pk.folder = std::move(msg.folder);
-      pk.current_file = std::move(msg.name);
+      pk.current_file = cs.name;
+      // A bank file the listing does not have: the folder changed on disk
+      if(cs.index >= 0)
+      {
+        const auto& fl = pk.files();
+        if(std::find(fl.begin(), fl.end(), pk.current_file) == fl.end())
+          pk.rescan();
+      }
       if(pk.update)
         pk.update();
+      self.show_current_sound();
     }
   };
 };
