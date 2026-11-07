@@ -267,6 +267,7 @@ struct WaveformItem
   // on_control_update (the ui struct itself only holds widgets)
   std::string sound_path;
   bool was_folder{};
+  std::string last_folder;
 
   // The file shown: the Sound file, or the file picked in the folder
   void show_file(const std::string& path)
@@ -343,27 +344,29 @@ struct WaveformItem
       ctx.set_stroke_width(1.);
       ctx.stroke();
 
-      // jitter bands, both symmetric (±): position at the start edge, duration
-      // at the end edge. Bands assume a jitter range of 1 (the audio uses the
-      // real *Jitter Range* ports).
-      auto band = ctx.to_rgba(halp::colors::editable_value_light);
-      band.a = 40;
-      const double pj = pos_j / 2. * draw_w();
-      if(pj > 0.5)
-      {
+      // Jitter ranges, both symmetric (±), as whiskers rather than fills so
+      // that the window's fill keeps its edges: position around the start
+      // edge at the top, duration around the end edge at the bottom. They
+      // assume a jitter range of 1 (the audio uses the real *Jitter Range*
+      // ports).
+      auto whisker_color = ctx.to_rgba(halp::colors::editable_value_light);
+      whisker_color.a = 200;
+      auto whisker = [&](double xa, double xb, double y) {
         ctx.begin_path();
-        ctx.draw_rect(x0 - pj, pad, 2. * pj, h - 2. * pad);
-        ctx.set_fill_color(band);
-        ctx.fill();
-      }
-      const double dj = dur_j / 2. * draw_w();
-      if(dj > 0.5)
-      {
-        ctx.begin_path();
-        ctx.draw_rect(x1 - dj, pad, 2. * dj, h - 2. * pad);
-        ctx.set_fill_color(band);
-        ctx.fill();
-      }
+        ctx.move_to(xa, y);
+        ctx.line_to(xb, y);
+        ctx.move_to(xa, y - 3.);
+        ctx.line_to(xa, y + 3.);
+        ctx.move_to(xb, y - 3.);
+        ctx.line_to(xb, y + 3.);
+        ctx.set_stroke_color(whisker_color);
+        ctx.set_stroke_width(1.);
+        ctx.stroke();
+      };
+      if(const double pj = pos_j / 2. * draw_w(); pj > 0.5)
+        whisker(x0 - pj, x0 + pj, pad + 5.);
+      if(const double dj = dur_j / 2. * draw_w(); dj > 0.5)
+        whisker(x1 - dj, x1 + dj, h - pad - 5.);
 
       // One bar per playing grain, fading with the grain's window
       auto head = ctx.to_rgba(halp::colors::runtime_value_light);
@@ -671,6 +674,28 @@ struct Granola::ui
         page.sound_file.set(fi.fileName().toStdString());
     }
     wf.was_folder = folder;
+
+    // A new folder: when the file picked in the previous one is not in it,
+    // pick its first file. The picker keeps a name it no longer lists, which
+    // left the waveform on a file that is not there while the first one played.
+    if(page.folder.value != wf.last_folder)
+    {
+      wf.last_folder = page.folder.value;
+      const QString dir = QString::fromStdString(page.folder.value);
+      const auto& picked = page.sound_file.value;
+      if(!dir.isEmpty()
+         && (picked.empty() || picked == "-"
+             || !QFileInfo::exists(dir + "/" + QString::fromStdString(picked))))
+      {
+        QStringList filters;
+        for(const auto& ext : QString::fromUtf8(sound_extensions.data(), qsizetype(sound_extensions.size()))
+                                  .split(' ', Qt::SkipEmptyParts))
+          filters.push_back("*." + ext);
+        const auto files = QDir{dir}.entryList(filters, QDir::Files, QDir::Name);
+        if(!files.empty() && page.sound_file.set)
+          page.sound_file.set(files.front().toStdString());
+      }
+    }
 
     show_current_sound();
   }
