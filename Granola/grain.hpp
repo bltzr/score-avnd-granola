@@ -94,6 +94,9 @@ struct GranuGrain
   // Current read position, normalized to [0, 1] over the buffer
   double position() const noexcept;
 
+  // Window values cached per grain, at most this many
+  static constexpr long window_cache_size = 8192;
+
   // Window value computed by the last call to incr()
   double m_last_win = 0.;
 

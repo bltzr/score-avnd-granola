@@ -17,9 +17,10 @@ void Granola::prepare(setup info)
   sampleinterval = 1.0 / samplerate;
   ms2samps = samplerate * 0.001;
 
-  // create the appropriate number of grains:
-  grains.reserve(256);
-  resize(inputs.num_voices);
+  // Every grain Max Voices allows is made here, with its buffers: neither
+  // adding nor removing voices allocates or frees on the audio thread.
+  resize(max_voices);
+  set_voice_count(inputs.num_voices);
 
   if(!scan)
   {
@@ -71,18 +72,26 @@ void Granola::release(std::shared_ptr<const void>& hold) noexcept
 void Granola::resize(int n)
 {
   buf_soft_lock = true; /// TODO: use a mutex or something?
-  set_voice_count(n);
+  for(auto& grain : grains)
+    release(grain.m_source_hold);
+  grains.resize(n);
   clear();
   buf_soft_lock = false;
 }
 
 void Granola::set_voice_count(int n)
 {
-  n = std::max(n, 0);
+  // Before prepare(), e.g. in the copy of the object the UI keeps
+  if(grains.size() < std::size_t(max_voices))
+    grains.resize(max_voices);
+
+  // The voices past the count stop
+  n = std::clamp(n, 0, max_voices);
   for(std::size_t i = n; i < grains.size(); i++)
+  {
+    grains[i].reset();
     release(grains[i].m_source_hold);
-  // Within the capacity reserved in prepare(): no allocation on the audio thread
-  grains.resize(n);
+  }
 }
 
 void Granola::clear()
