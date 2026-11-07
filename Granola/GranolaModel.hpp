@@ -91,7 +91,8 @@ public:
       halp__enum_combobox("Window mode", Beta, Beta, Cos, Kuma)
     } window_mode;
     halp::toggle<"Loop"> loopmode;
-    struct : halp::spinbox_i32<"Source Channels", halp::range{1, NCHAN, 1}>
+    // 0 = all the channels of the sound file
+    struct : halp::spinbox_i32<"Source Channels", halp::range{0, NCHAN, 0}>
     {
     } src_channels;
     struct : halp::spinbox_i32<"Channel Offset", halp::range{0, NCHAN - 1, 0}>

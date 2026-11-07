@@ -138,7 +138,9 @@ void Granola::operator()(tick t)
     }
   }
 
-  const int n_channels = CLAMP(inputs.src_channels, 1, (int)cur.channels);
+  const int n_channels = inputs.src_channels <= 0
+                             ? std::min((int)cur.channels, NCHAN)
+                             : CLAMP(inputs.src_channels, 1, (int)cur.channels);
   const int ch_offset
       = CLAMP(inputs.channel_offset, 0, (int)cur.channels - n_channels);
 
@@ -329,10 +331,17 @@ void Granola::operator()(tick t)
         std::span<double> outSamps{
             grains[i].incr((long)inputs.interp_type.value)};
 
-        const int nw = std::min(out_channels, (int)outSamps.size());
-        for(int j = 0; j < nw; j++)
+        if(n_channels == 1)
         {
-          outputs.audio.samples[j][k] += outSamps[j] * inputs.gain;
+          // A single source channel is sent to every output
+          for(int j = 0; j < live_out_channels; j++)
+            outputs.audio.samples[j][k] += outSamps[0] * inputs.gain;
+        }
+        else
+        {
+          const int nw = std::min(out_channels, (int)outSamps.size());
+          for(int j = 0; j < nw; j++)
+            outputs.audio.samples[j][k] += outSamps[j] * inputs.gain;
         }
 
         busyCount++;
