@@ -91,6 +91,12 @@ struct GranuGrain
 
   void reset();
 
+  // Current read position, normalized to [0, 1] over the buffer
+  double position() const noexcept;
+
+  // Window value computed by the last call to incr()
+  double m_last_win = 0.;
+
   double window(long phase);
 
 private:

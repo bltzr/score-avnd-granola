@@ -17,8 +17,14 @@
 #include <libremidi/message.hpp>
 #include <rnd/random.hpp>
 
+#include <ossia/detail/variant.hpp>
+
+#include <boost/container/static_vector.hpp>
+
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <memory>
 
 #include <random>
 
@@ -100,7 +106,7 @@ public:
     } channel_offset;
     struct : halp::spinbox_i32<"Max Voices", halp::range{0, 256, 128}>
     {
-      void update(Granola& self) { self.grains.resize(value); }
+      void update(Granola& self) { self.set_voice_count(value); }
     } num_voices;
     struct : halp::toggle<"Continuous", halp::toggle_setup{.init = true}> {
       void update(Granola& self)
@@ -147,32 +153,44 @@ public:
     static constexpr double height() { return 420.; }
   };
 
-  // --- Waveform UI messaging (score message bus, processor -> UI). The UI has
-  // no direct access to the decoded audio, so the processor ships a
-  // downsampled envelope of the current sound whenever it changes.
+  // --- UI messaging (score message bus). The host draws the waveform from the
+  // sound file itself (halp::waveform_view), so what the processor sends is
+  // small and of fixed size: sending it never allocates on the audio thread.
+
+  // The read positions of the grains playing the current sound.
+  struct playheads
+  {
+    static constexpr int max_heads = 32;
+    uint8_t count;
+    uint8_t amp[max_heads];  // window amplitude, 0-255
+    uint16_t pos[max_heads]; // position in the current sound, 0-65535
+  };
+  // The sound that plays, for the picker.
+  struct current_sound
+  {
+    int32_t index;  // in the bank; -1 when the Sound port's file plays
+    char name[256]; // its file name
+  };
   struct processor_to_ui
   {
-    std::vector<float> min_peaks, max_peaks;
-    std::string name;   // current sound basename
-    std::string folder; // its containing folder (the UI can't read the port path)
-    float duration_s{};
+    halp_flag(relocatable);
+    ossia::variant<playheads, current_sound> message;
   };
   struct ui_to_processor
   {
     // Refresh request, sent when the UI panel is (re)created so a late panel
-    // still gets the current envelope.
+    // still gets the current sound.
   };
   std::function<void(processor_to_ui)> send_message;
   void process_message(const ui_to_processor&) { ui_refresh = true; }
 
   bool ui_refresh{true};
-  std::string ui_sound_name;  // name/path of the sound last sent to the UI
-  int64_t ui_sound_mtime{-1};
-  // Cached envelope of the current MONO file (the bank holds its own peaks, but
-  // mono plays the Sound port directly); recomputed when that file changes.
-  std::vector<float> mono_min_peaks, mono_max_peaks;
-  float mono_duration_s{};
-  std::string mono_peaks_path;
+  // What the UI was last told: the bank sound, its index, the Sound port file
+  int ui_sent_index{-2};
+  const void* ui_sent_sound{};
+  std::size_t ui_sent_path{};
+  int ui_frame_counter{0}; // throttles the playheads
+  bool ui_heads_shown{false};
 
   struct MidiVoice
   {
@@ -201,33 +219,57 @@ public:
 
   // --- Sound bank: scanned/decoded in a worker thread, swapped on the
   // processing thread. Active grains keep their sound via shared_ptr holds.
+  // Nothing of it is allocated nor freed on the processing thread: the worker
+  // frees the banks that are replaced, and the sounds whose last hold a grain
+  // let go of.
   SoundBank bank;
   long bank_scan_phase{0};
   bool bank_scan_inflight{false};
-  std::string last_sound_path; // to reset captured grains when the file changes
+  std::size_t last_sound_path{}; // hash: resets captured grains when the file changes
 
-  struct scan_request
+  //! Shared by the processing thread and the worker; made in prepare(). The
+  //! processing thread writes it only while no scan is in flight, the worker
+  //! only during one, and the task queue orders the two.
+  struct scan_state
   {
-    std::string folder;
-    double rate;
-    SoundBank previous;
+    std::string folder; // to scan; its capacity is reserved in prepare()
+    double rate{};
+    SoundBank last;     // the worker's last result: unchanged files are reused
+    SoundBank retired;  // the bank the last result replaced
+    std::vector<std::shared_ptr<const void>> released; // sounds grains let go of
+  };
+  std::shared_ptr<scan_state> scan;
+
+  // Sounds a grain held last, kept until the next scan frees them
+  boost::container::static_vector<std::shared_ptr<const void>, 256> released;
+  void release(std::shared_ptr<const void>& hold) noexcept;
+
+  // A scan's result, applied on the processing thread. Not a std::function:
+  // it travels inline in the execution command, and the bank it replaces goes
+  // back to the worker to be freed.
+  struct apply_scan
+  {
+    SoundBank bank;
+    explicit operator bool() const noexcept { return true; }
+    void operator()(Granola& self) noexcept;
   };
 
   struct worker_t
   {
-    std::function<void(std::shared_ptr<scan_request>)> request;
+    std::function<void(std::shared_ptr<scan_state>)> request;
 
-    static std::function<void(Granola&)> work(std::shared_ptr<scan_request> rq)
+    static apply_scan work(std::shared_ptr<scan_state> st)
     {
-      auto bank = scan_folder(rq->folder, rq->rate, rq->previous);
-      return [bank = std::move(bank)](Granola& self) mutable {
-        self.bank = std::move(bank);
-        self.bank_scan_inflight = false;
-      };
+      // What the processing thread is done with is freed here
+      st->retired = {};
+      st->released.clear();
+      st->last = scan_folder(st->folder, st->rate, st->last);
+      return apply_scan{st->last};
     }
   } worker;
 
   void request_scan();
+  void send_playheads(int frames, const GrainSource& cur);
 
   // t_critical  lock; // is there an equivalent?
 
@@ -235,6 +277,8 @@ public:
   void prepare(setup info);
 
   void resize(int n);
+  //! Grows or shrinks the grains, letting go of the sounds of those removed
+  void set_voice_count(int n);
   void clear();
 
   using tick = halp::tick;

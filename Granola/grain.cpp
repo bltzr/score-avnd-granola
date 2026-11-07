@@ -1,6 +1,7 @@
 
 #include "grain.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -22,7 +23,9 @@ void GranuGrain::reset()
 {
   m_active = false;
   m_source = {};
-  m_source_hold.reset();
+  // m_source_hold is let go of by the owner of the grain: the grain may hold
+  // the last reference to its sound, which must not be freed on the audio
+  // thread.
   amp_init.clear();
   amp_init.reserve(NCHAN);
   m_chan_amp.clear();
@@ -198,6 +201,17 @@ double GranuGrain::window(long phase_index)
   return win;
 }
 
+double GranuGrain::position() const noexcept
+{
+  if(m_buf_len <= 0.)
+    return 0.;
+  const double phase = m_phase_counter >= m_max_count ? 1. : m_phase_counter * m_incr;
+  double idx = m_startpoint + (m_direction ? 1. - phase : phase) * m_playlen;
+  if(m_loop_mode)
+    idx = wrapDouble(idx, m_buf_len);
+  return std::clamp(idx / m_buf_len, 0., 1.);
+}
+
 typedef enum _granu_interp
 {
   NONE,
@@ -218,6 +232,7 @@ GranuGrain::incr(const long interpType)
   // printf("incr_src_channels %ld\n", nchans);
 
   const double win = window(m_phase_counter);
+  m_last_win = win;
 
   //qDebug() << phase << " : " << win;
 
