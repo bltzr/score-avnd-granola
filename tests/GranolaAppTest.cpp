@@ -6,12 +6,15 @@
 #include "Granola/Granola.hpp"
 
 #include <Process/Commands/SetControlValue.hpp>
+#include <Process/ProcessList.hpp>
 #include <Process/Dataflow/Port.hpp>
 #include <Process/DocumentPlugin.hpp>
 #include <Process/Focus/FocusDispatcher.hpp>
 #include <Process/LayerPresenter.hpp>
 #include <Process/ProcessContext.hpp>
 
+#include <Dataflow/Commands/EditConnection.hpp>
+#include <Process/Dataflow/Cable.hpp>
 #include <Scenario/Document/Interval/IntervalModel.hpp>
 #include <Scenario/Document/ScenarioDocument/ScenarioDocumentModel.hpp>
 
@@ -521,5 +524,129 @@ TEST_CASE("The panel and the process gone in any order, mid-playback", "[app]")
       }
       CHECK(m.finite);
     }
+  });
+}
+
+namespace
+{
+const QString granola_v1_uuid = QStringLiteral("38F9684D-54A6-4F48-91E4-3B251F0956EA");
+
+Process::ProcessModel* add_by_uuid(score::Document& doc, const QString& uuid)
+{
+  return score::test::add_process(doc, uuid, {});
+}
+
+template <typename Ports>
+auto port_named(const Ports& ports, const QString& name)
+{
+  for(auto* p : ports)
+    if(p->name() == name)
+      return p;
+  return decltype(*ports.begin()){};
+}
+
+std::vector<Process::ProcessModel*> processes_of(score::Document& doc, const QString& uuid)
+{
+  std::vector<Process::ProcessModel*> found;
+  for(auto& p : score::test::base_interval(doc).processes)
+    if(p.concreteKey() == UuidKey<Process::ProcessModel>::fromString(uuid))
+      found.push_back(&p);
+  return found;
+}
+
+Scenario::ScenarioDocumentModel& scenario_model(score::Document& doc)
+{
+  return static_cast<Scenario::ScenarioDocumentModel&>(doc.model().modelDelegate());
+}
+}
+
+TEST_CASE("A document of the Granola released first loads with its ports, values and cables", "[app][v1]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    // The uuid the documents of the first Granola name: what score made then
+    auto* granola = add_by_uuid(*doc, granola_v1_uuid);
+    auto* other = add_by_uuid(*doc, granola_v1_uuid);
+    REQUIRE(granola);
+    REQUIRE(other);
+    QStringList names;
+    for(auto* i : granola->inlets())
+      names.push_back(i->name());
+    CHECK(
+        names
+        == QStringList{
+            "Sound", "Position", "Position Jitter", "Position Jitter Range", "Duration",
+            "Duration Jitter", "Duration Jitter Range", "Pitch", "Pitch Jitter",
+            "Pitch Jitter Range", "Reverse", "Density", "Density Jitter",
+            "Density Jitter Range", "Gain", "Gain Jitter", "Gain Jitter Range",
+            "Window coefs", "Interpolation mode", "Window mode", "Loop", "Source Channels",
+            "Channel Offset", "Max Voices", "Continuous", "Trigger", "MIDI In",
+            "listening to MIDI"});
+
+    // Values on the ports the new Granola has not, and a cable into one
+    const std::vector<std::pair<QString, float>> values{
+        {"Position Jitter", 0.4f},       {"Position Jitter Range", 0.3f},
+        {"Duration Jitter Range", 0.6f}, {"Density Jitter Range", 12.f},
+        {"Gain Jitter Range", 0.25f},    {"Density", 7.f}};
+    for(auto& [name, v] : values)
+    {
+      auto* inlet = qobject_cast<Process::ControlInlet*>(port_named(granola->inlets(), name));
+      REQUIRE(inlet);
+      CommandDispatcher<>{doc->context().commandStack}.submit<Process::SetControlValue>(
+          *inlet, v);
+    }
+    auto* from = port_named(other->outlets(), "Active Grains");
+    auto* to = port_named(granola->inlets(), "Pitch Jitter Range");
+    REQUIRE(from);
+    REQUIRE(to);
+    CommandDispatcher<>{doc->context().commandStack}.submit(new Dataflow::CreateCable{
+        scenario_model(*doc), Id<Process::Cable>{4243}, Process::CableType::ImmediateGlutton,
+        *from, *to});
+    QApplication::processEvents();
+    REQUIRE(scenario_model(*doc).cables.size() == 1);
+
+    for(int format = 0; format < 2; format++)
+    {
+      CAPTURE(format);
+      auto* loaded = format == 0 ? score::test::reload_via_json(ctx, *doc)
+                                 : score::test::reload_via_bytes(ctx, *doc);
+      REQUIRE(loaded);
+      // As Granola (v1), its ports, values and cable as they were
+      const auto found = processes_of(*loaded, granola_v1_uuid);
+      REQUIRE(found.size() == 2);
+      Process::ProcessModel* g{};
+      for(auto* p : found)
+        if(p->id() == granola->id())
+          g = p;
+      REQUIRE(g);
+      CHECK(g->inlets().size() == granola->inlets().size());
+      for(auto& [name, v] : values)
+      {
+        CAPTURE(name.toStdString());
+        auto* inlet = qobject_cast<Process::ControlInlet*>(port_named(g->inlets(), name));
+        REQUIRE(inlet);
+        CHECK(ossia::convert<float>(inlet->value()) == v);
+      }
+      auto& cables = scenario_model(*loaded).cables;
+      REQUIRE(cables.size() == 1);
+      auto& sink = cables.begin()->sink().find(loaded->context());
+      CHECK(sink.name() == "Pitch Jitter Range");
+      CHECK(&sink == port_named(g->inlets(), "Pitch Jitter Range"));
+    }
+  });
+}
+
+TEST_CASE("The new Granola is another process, without the Jitter Range ports", "[app][v1]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto* g = add_by_uuid(*doc, QString::fromUtf8(G::uuid()));
+    REQUIRE(g);
+    CHECK(g->concreteKey() != UuidKey<Process::ProcessModel>::fromString(granola_v1_uuid));
+    CHECK(port_named(g->inlets(), "Position Deviation"));
+    CHECK(!port_named(g->inlets(), "Position Jitter Range"));
+    CHECK(!port_named(g->inlets(), "Reserved"));
   });
 }

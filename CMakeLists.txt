@@ -29,6 +29,23 @@ avnd_score_plugin_add(
   NAMESPACE Granola
 )
 
+# Granola as released first, for the documents made with it
+avnd_score_plugin_add(
+  BASE_TARGET score_addon_granola
+  SOURCES
+    Granola/v1/Granola.hpp
+    Granola/v1/GranolaModel.hpp
+    Granola/v1/GranolaModel.cpp
+    Granola/v1/GranolaUi.hpp
+    Granola/v1/grain.hpp
+    Granola/v1/grain.cpp
+    Granola/v1/utils.hpp
+    Granola/v1/utils.cpp
+  TARGET granola_v1
+  MAIN_CLASS Granola
+  NAMESPACE GranolaV1
+)
+
 avnd_score_plugin_finalize(
   BASE_TARGET score_addon_granola
   PLUGIN_VERSION 1
@@ -48,6 +65,12 @@ if(SCORE_TESTING AND TARGET Catch2::Catch2WithMain AND NOT SCORE_FAST_DEV_BUILD)
   target_include_directories(score_addon_granola_dsp_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(score_addon_granola_dsp_test PRIVATE Catch2::Catch2WithMain score_plugin_avnd)
   add_test(NAME score_addon_granola_dsp_test COMMAND score_addon_granola_dsp_test)
+
+  add_executable(score_addon_granola_v1_test tests/GranolaV1Test.cpp ${GRANOLA_DSP_SOURCES}
+    Granola/v1/GranolaModel.cpp Granola/v1/grain.cpp Granola/v1/utils.cpp)
+  target_include_directories(score_addon_granola_v1_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(score_addon_granola_v1_test PRIVATE Catch2::Catch2WithMain score_plugin_avnd)
+  add_test(NAME score_addon_granola_v1_test COMMAND score_addon_granola_v1_test)
 
   add_executable(score_addon_granola_fuzz_test tests/GranolaFuzzTest.cpp ${GRANOLA_DSP_SOURCES})
   target_include_directories(score_addon_granola_fuzz_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

@@ -584,14 +584,15 @@ TEST_CASE("A Sound file loaded again stops the grains reading the old one", "[sa
       CHECK(g.m_source.data == ptrs.data());
 }
 
-TEST_CASE("The ports, in their order: documents restore them by it", "[ports]")
+TEST_CASE("The ports, by the names documents and presets find them by", "[ports]")
 {
-  // Add new ports at the end, and give a renamed one its former_name()
+  // score finds a saved port by its name and type: renaming one, or giving it
+  // another type, drops its value, cables and automation in saved documents
   const std::vector<std::string_view> expected{
       "Sound", "Position", "Position Deviation", "Scan", "Duration", "Duration Deviation",
       "Spread", "Pitch", "Pitch Deviation", "Pitch Deviation in Semitones", "Reverse",
       "Density", "Density Deviation", "Reverse Chance", "Gain", "Gain Deviation",
-      "Reserved", "Window coefs", "Interpolation mode", "Window mode", "Loop",
+      "Window coefs", "Interpolation mode", "Window mode", "Loop",
       "Source Channels", "Channel Offset", "Max Voices", "Continuous", "Trigger",
       "MIDI In", "listening to MIDI", "Source", "Sounds", "Sound in folder", "Random",
       "Scan Across Sounds", "Sample Start", "Sample End", "Output Channels", "Scan Mode"};
