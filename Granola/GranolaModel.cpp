@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <numbers>
 #include <string_view>
 
@@ -394,7 +395,7 @@ double Granola::density_at(int s) noexcept
       break;
     density_now = ossia::safe_isfinite(v) ? std::clamp(double(v), 0., 256.) : 1.;
   }
-  return std::max(density_now, min_density);
+  return density_now;
 }
 
 bool Granola::reads_folder() const noexcept
@@ -647,29 +648,34 @@ void Granola::advance_scan(const tick_plan& p) noexcept
 void Granola::advance_timing(const tick_plan& p, int s) noexcept
 {
   // When an interval has passed, keeping the fraction of a sample past it
+  // Density 0: none, the counters going on, so that grains come at once
+  // when it is above 0 again
   const auto passed = [](double& counter, double every) {
-    const bool done = counter >= every;
+    const bool done = every > 0. && counter >= every;
     if(done)
       counter = counter - every < every ? counter - every : 0.;
     counter += 1.;
     return done;
   };
-  // Within the bounds density_factor_of() gives it whatever set it: never 0
+  // Within the bounds density_factor_of() gives it whatever set it: never
+  // 0, so that any Density above 0 makes grains
   constexpr double most = max_density_factor;
   const double factor = ossia::safe_isnan(density_factor)
                             ? 1.
                             : std::clamp(density_factor, 1. / most, most);
-  const double density = std::max(density_at(s) * factor, min_density);
+  const double density = density_at(s) * factor;
+  // 0 for Density 0: no interval passes
+  const auto every = [density](double interval) { return density > 0. ? interval / density : 0.; };
   if(midi_active)
   {
     for(int note = 0; note < 128; note++)
       if(auto& v = midi_voices[note]; v.active)
-        if(passed(v.counter, p.note_interval[note] / density))
+        if(passed(v.counter, every(p.note_interval[note])))
           midi_pending.set(note);
   }
   else if(inputs.playing)
   {
-    if(passed(trigger_counter, p.interval / density))
+    if(passed(trigger_counter, every(p.interval)))
       trigger = true;
   }
 }
@@ -682,6 +688,12 @@ void Granola::operator()(tick t)
   sanitize_inputs();
   stop_replaced_sound();
 
+  // Density from where it was, then as its values in this tick say; the
+  // control's own when none came
+  density_next = 0;
+  if(density_now < 0. || inputs.density.values.empty())
+    density_now = inputs.density;
+
   const bool from_folder = reads_folder();
   int cur_index = -1;
   const GrainSource cur = current_source(from_folder, cur_index);
@@ -690,9 +702,10 @@ void Granola::operator()(tick t)
   // prepared, its buffers not made
   if(!cur || scratch.empty() || free_from.size() != grains.size())
   {
-    // Nothing to play, e.g. a file of the folder being decoded
     for(int j = 0; j < (int)outputs.audio.channels; j++)
       std::fill_n(outputs.audio.samples[j], t.frames, 0.);
+    // Density as its values of the tick leave it, for the next tick
+    density_at(std::numeric_limits<int>::max());
     return;
   }
 
@@ -700,11 +713,6 @@ void Granola::operator()(tick t)
   if(inputs.trig)
     trigger = true;
   auto plan = make_plan(cur, cur_index, from_folder);
-  // Density from where it was, then as its values in this tick say; the
-  // control's own when none came
-  density_next = 0;
-  if(density_now < 0. || inputs.density.values.empty())
-    density_now = inputs.density;
 
   // In blocks the buffers made in prepare() hold
   for(int b0 = 0; b0 < t.frames; b0 += max_block)
@@ -762,6 +770,8 @@ void Granola::operator()(tick t)
     }
   }
 
+  // Values past the tick's last sample, which a host does not send: kept
+  density_at(std::numeric_limits<int>::max());
   outputs.active_grains
       = (int)std::ranges::count_if(grains, [](const Grain& g) { return g.m_active; });
   send_playheads(t.frames, cur);

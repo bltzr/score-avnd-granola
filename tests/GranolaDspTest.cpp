@@ -1,6 +1,8 @@
 // The processor: what each control does to the grains and the outputs.
 #include "GranolaRig.hpp"
 
+#include <ossia/math/safe_math.hpp>
+
 #include <avnd/introspection/input.hpp>
 #include <avnd/wrappers/metadatas.hpp>
 
@@ -323,12 +325,12 @@ TEST_CASE("Controls out of their ranges, NaN or infinite: no crash, finite outpu
     r.run(0.2);
     for(int c = 0; c < r.outputs(); c++)
       for(double x : r.out[c])
-        REQUIRE(std::isfinite(x));
+        REQUIRE(ossia::safe_isfinite(x));
     // Back in range
     CHECK(in.num_voices.value <= (int)r.g->grains.size());
     CHECK(in.out_channels.value <= Granola::Granola::max_outputs);
-    CHECK(std::isfinite(in.pos.value));
-    CHECK(std::isfinite(in.win_coefs.value.x));
+    CHECK(ossia::safe_isfinite(in.pos.value));
+    CHECK(ossia::safe_isfinite(in.win_coefs.value.x));
   }
 }
 
@@ -351,7 +353,7 @@ TEST_CASE("Grains at the very end of the sound, or of a region at its end", "[sa
       in.pos.value = 0.5f;
       r.run(0.2);
       for(double x : r.out[0])
-        REQUIRE(std::isfinite(x));
+        REQUIRE(ossia::safe_isfinite(x));
     }
 }
 
@@ -379,7 +381,7 @@ TEST_CASE("Windows: in [0, 1], peaking at 1, at 0 at both ends", "[window]")
         for(int i = 0; i <= 20000; i++)
         {
           const double v = w(i / 20000.);
-          REQUIRE(std::isfinite(v));
+          REQUIRE(ossia::safe_isfinite(v));
           REQUIRE(v >= 0.);
           REQUIRE(v <= 1.);
           peak = std::max(peak, v);
@@ -658,10 +660,10 @@ TEST_CASE("Density Deviation never stops the grains, whatever it draws", "[timin
     {
       CAPTURE(d, z);
       const double f = G::density_factor_of(z, d);
-      CHECK(std::isfinite(f));
+      CHECK(ossia::safe_isfinite(f));
       CHECK(f >= 1. / G::max_density_factor);
       CHECK(f <= G::max_density_factor);
-      if(std::isfinite(z) && std::abs(z * d) < 8.f)
+      if(ossia::safe_isfinite(z) && std::abs(z * d) < 8.f)
         CHECK(f == Catch::Approx(std::exp2(z * d / 2.)));
     }
   CHECK(G::density_factor_of(0.f, 1.f) == 1.);
@@ -669,52 +671,93 @@ TEST_CASE("Density Deviation never stops the grains, whatever it draws", "[timin
   CHECK(G::density_factor_of(-2.f, 1.f) == Catch::Approx(0.5));
   CHECK(G::density_factor_of(nan, 1.f) == 1.);
 
-  // Each grain's draw the lowest there is, or one that no draw gives: the
-  // next grains come, at Density / max_density_factor at the slowest.
-  // Grains of 0.05 s at Density 20: 400 a second, 25 at the slowest.
+  // A grain drew the lowest factor there is, or one that no draw gives: the
+  // next grain comes within the slowest interval, and then they come as
+  // often as Density says. Grains of 0.05 s at Density 20: one every 120
+  // samples, every 1920 at the slowest.
   for(double forced : {G::density_factor_of(-inf, 1.f), 0., -1., 1e-300, double(nan)})
   {
     CAPTURE(forced);
     Rig r;
     r.g->inputs.dens_j.value = 1.f;
     r.run(0.05);
-    int made = 0;
+    r.g->density_factor = forced;
+    const auto before = r.g->grains_made;
+    double longest = 0.;
     for(int t = 0; t < Rig::rate / Rig::F; t++)
     {
-      r.g->density_factor = forced;
-      const auto before = r.g->grains_made;
       r.tick();
-      made += int(r.g->grains_made - before);
+      longest = std::max(longest, r.g->trigger_counter);
     }
-    CHECK(made >= 20);
-    CHECK(std::isfinite(r.g->trigger_counter));
+    CHECK(longest <= 120. * G::max_density_factor + 1.);
+    CHECK(r.g->grains_made - before >= 200);
   }
 }
 
-TEST_CASE("Density 0: the grain clock goes on, slower, and back at once", "[timing]")
+TEST_CASE("Density 0 makes no grains; above 0 they come at once", "[timing]")
 {
-  for(float density : {0.f, -0.f, 1e-30f})
+  for(float zero : {0.f, -0.f})
   {
-    CAPTURE(density);
+    CAPTURE(zero);
     Rig r;
-    r.g->inputs.density.value = density;
+    r.g->inputs.dur.value = 24.f / Rig::rate;
+    r.g->inputs.dens_j.value = 1.f;
+    r.run(0.1);
+    REQUIRE(r.g->grains_made > 0);
+    // Muted by Density 0, as if the last grain had drawn a factor of 0
+    r.g->inputs.density.value = zero;
+    r.g->density_factor = 0.;
+    r.run(0.1);
+    while(std::ranges::any_of(r.g->grains, [](auto& g) { return g.m_active; }))
+      r.tick();
+    const auto muted = r.g->grains_made;
+    r.run(1.);
+    CHECK(r.g->grains_made == muted);
+    CHECK(std::ranges::all_of(r.out[0], [](double x) { return x == 0.; }));
+
+    // Back above 0 at sample 300 of a block, to a grain every 240 samples,
+    // the next ones without deviation: one grain, at that sample
+    r.g->inputs.dens_j.value = 0.f;
+    r.g->inputs.density.values[300] = 0.1f;
+    r.g->inputs.density.value = 0.1f;
+    r.tick();
+    r.g->inputs.density.values.clear();
+    CHECK(r.g->grains_made == muted + 1);
+    CHECK(std::all_of(&r.out[0][0], &r.out[0][300], [](double x) { return x == 0.; }));
+    CHECK(std::any_of(&r.out[0][300], &r.out[0][330], [](double x) { return x != 0.; }));
+    // Then as often as Density says, whatever factors come: about 100
+    r.g->inputs.dens_j.value = 1.f;
+    const auto back = r.g->grains_made;
     r.run(0.5);
-    CHECK(std::isfinite(r.g->trigger_counter));
-    // As Density comes back, so do the grains: the interval was finite
-    r.g->inputs.density.value = 20.f;
-    const auto before = r.g->grains_made;
-    r.run(0.05);
-    CHECK(r.g->grains_made - before >= 15);
+    CHECK(r.g->grains_made - back >= 50);
   }
-  // At the slowest, still a grain every interval / min_density: of 24
-  // samples there, a grain about every half second
+}
+
+TEST_CASE("Density's values reach the next tick when nothing plays", "[timing]")
+{
+  using source = std::decay_t<decltype(Granola::Granola{}.inputs.source.value)>;
+  // Grains of 24 samples: one every 3 samples at Density 8, 12 at 2
   Rig r;
   r.g->inputs.dur.value = 24.f / Rig::rate;
-  r.g->inputs.density.value = 0.f;
+  r.g->inputs.density.value = 1.f;
   r.run(0.1);
+  // A tick with nothing to play, e.g. a file of the folder being decoded,
+  // in which Density goes to 8
+  r.g->inputs.source.value = source::Folder;
+  r.g->inputs.sounds.value = "/a/folder/being/listed";
+  r.g->inputs.density.values[100] = 8.f;
+  r.g->inputs.density.value = 8.f;
+  r.tick();
+  r.g->inputs.density.values.clear();
+  CHECK(r.g->density_now == 8.);
+  // The next one plays at 8 until Density goes to 2 at its sample 400
+  r.g->inputs.source.value = source::File;
+  r.g->inputs.density.values[400] = 2.f;
+  r.g->inputs.density.value = 2.f;
   const auto before = r.g->grains_made;
-  r.run(1.);
-  CHECK(r.g->grains_made - before >= 1);
+  r.tick();
+  r.g->inputs.density.values.clear();
+  CHECK(double(r.g->grains_made - before) == Catch::Approx(400. / 3. + 112. / 12.).margin(3.));
 }
 
 TEST_CASE("Density is sample-accurate: its values change the pace where they come", "[timing]")
@@ -749,7 +792,7 @@ TEST_CASE("Density is sample-accurate: its values change the pace where they com
     r.g->inputs.density.values[100] = v;
     r.tick();
     r.g->inputs.density.values.clear();
-    CHECK(std::isfinite(r.g->density_now));
+    CHECK(ossia::safe_isfinite(r.g->density_now));
     CHECK(r.g->density_now >= 0.);
     CHECK(r.g->density_now <= 256.);
   }
