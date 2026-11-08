@@ -72,6 +72,11 @@ if(SCORE_TESTING AND TARGET Catch2::Catch2WithMain AND NOT SCORE_FAST_DEV_BUILD)
   target_link_libraries(score_addon_granola_v1_test PRIVATE Catch2::Catch2WithMain score_plugin_avnd)
   add_test(NAME score_addon_granola_v1_test COMMAND score_addon_granola_v1_test)
 
+  add_executable(score_addon_granola_behaviour_test tests/GranolaBehaviourTest.cpp ${GRANOLA_DSP_SOURCES})
+  target_include_directories(score_addon_granola_behaviour_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(score_addon_granola_behaviour_test PRIVATE Catch2::Catch2WithMain score_plugin_avnd)
+  add_test(NAME score_addon_granola_behaviour_test COMMAND score_addon_granola_behaviour_test)
+
   add_executable(score_addon_granola_fuzz_test tests/GranolaFuzzTest.cpp ${GRANOLA_DSP_SOURCES})
   target_include_directories(score_addon_granola_fuzz_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(score_addon_granola_fuzz_test PRIVATE Catch2::Catch2WithMain score_plugin_avnd)
