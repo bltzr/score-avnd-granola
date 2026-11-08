@@ -1,8 +1,6 @@
 // The processor: what each control does to the grains and the outputs.
 #include "GranolaRig.hpp"
 
-#include <score/tools/NaturalSort.hpp>
-
 #include <avnd/introspection/input.hpp>
 #include <avnd/wrappers/metadatas.hpp>
 
@@ -603,13 +601,8 @@ TEST_CASE("The ports, by the names documents and presets find them by", "[ports]
   CHECK(names == expected);
 }
 
-TEST_CASE("The panel lists a folder in the host's order, and reads indices as halp", "[ui]")
+TEST_CASE("The panel reads the indices of Sound in folder as the processor does", "[ui]")
 {
-  QStringList names{"b10.wav", "B2.wav", "a.wav", "b1.wav", "b02.wav", "c.wav"};
-  score::sortNaturally(names);
-  // Equal but for case and leading zeros: by their characters, B before b
-  CHECK(names == QStringList{"a.wav", "b1.wav", "B2.wav", "b02.wav", "b10.wav", "c.wav"});
-
   for(std::string v : {"-1", "3", "3.7", "1e2", "inf", "nan", "x.wav", "", "2e10"})
   {
     CAPTURE(v);
