@@ -1051,12 +1051,14 @@ void Granola::operator()(tick t)
     for(std::size_t i = 0; i < grains.size(); i++)
       free_from[i] = grains[i].m_active ? play(grains[i], 0, n, b0, plan) : 0;
 
-    // Then sample by sample: Scan, and the grains that start, one a sample
-    // at most, in a voice free at that sample
+    // Then sample by sample: Scan, the clock, and the grains that start, one
+    // a sample at most, in a voice free at that sample. The clock first: a
+    // grain is due at the sample its interval ends, or Density's value comes
     for(int s = 0; s < n; s++)
     {
       if(inputs.playing || midi_active)
         advance_scan(plan);
+      advance_timing(plan, b0 + s);
 
       const bool wanted = midi_active ? midi_pending.any() : trigger;
       if(wanted && inputs.dur != 0. && inputs.rate != 0.)
@@ -1070,8 +1072,6 @@ void Granola::operator()(tick t)
             free_from[i] = play(grains[i], s, n, b0, plan);
           break;
         }
-
-      advance_timing(plan, b0 + s);
     }
 
     // The part every output shares, and the gain, once for every sample
