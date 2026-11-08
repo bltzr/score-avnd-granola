@@ -93,7 +93,6 @@ void Granola::clear()
 float Granola::scanned(double rel) const noexcept
 {
   using mode = std::decay_t<decltype(inputs.scan_mode.value)>;
-  // Straight and Ping-pong turn at the last place a whole grain fits
   const double last = scan_last();
   switch(inputs.scan_mode.value)
   {
@@ -105,7 +104,7 @@ float Granola::scanned(double rel) const noexcept
     }
     case mode::Loop:
     default:
-      return float(rel - std::floor(rel));
+      return float(rel - last * std::floor(rel / last));
   }
 }
 
@@ -375,6 +374,7 @@ void Granola::operator()(tick t)
     //qDebug() << " trigger ! " ;*/
   }
 
+  const double scan_end = scan_last();
   for(int k = 0; k < t.frames; k++)
   {
     if(inputs.playing || midi_active)
@@ -384,14 +384,14 @@ void Granola::operator()(tick t)
       switch(inputs.scan_mode.value)
       {
         case mode::Loop:
-          scan_phase -= std::floor(scan_phase);
+          scan_phase -= scan_end * std::floor(scan_phase / scan_end);
           break;
         case mode::PingPong: // there and back
-          scan_phase -= 2. * scan_last() * std::floor(scan_phase / (2. * scan_last()));
+          scan_phase -= 2. * scan_end * std::floor(scan_phase / (2. * scan_end));
           break;
         case mode::Straight: // stays at the end it reached
           scan_phase = std::clamp(
-              scan_phase, -(double)inputs.pos, std::max(scan_last() - inputs.pos, 0.));
+              scan_phase, -(double)inputs.pos, std::max(scan_end - inputs.pos, 0.));
           break;
       }
     }
