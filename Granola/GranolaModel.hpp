@@ -79,16 +79,21 @@ public:
     //halp::soundfile_port<"Window", double> win; // not supported yet
     //halp::range_slider_f32<"In", halp::range_slider_range{-10, 100, {5, 20}}> ta_range;
     halp::hslider_f32<"Position", halp::range{0.00000001, 1., 0.00000001}> pos;
-    // Each Jitter spreads its control per grain, as a normal distribution of
-    // deviation Jitter / 4: at 1, 95% of the grains within ±0.5 of it (of the
-    // file for Position and Duration; relative for Density and Gain).
-    halp::hslider_f32<"Position Jitter", halp::range{0., 1., 0.}> pos_j;
+    // Each Deviation spreads its control per grain, as a normal distribution
+    // of deviation d / 4: at 1, 95% of the grains within ±0.5 of it (of the
+    // file for Position and Duration, relative for Density). Gain's lowers
+    // some grains, in decibels.
+    struct : halp::hslider_f32<"Position Deviation", halp::range{0., 1., 0.}>
+    {
+      static constexpr std::string_view former_name() noexcept { return "Position Jitter"; }
+    } pos_j;
 
-    // The five controls after each Jitter were its Jitter Range, which only
-    // scaled it. Their places are kept, so that documents restore the ports
-    // after them; each is another kind of control than it was, so that a
-    // document from then rebuilds it, and upgrade_value() gives it the value
-    // that changes nothing. Their names are new: presets of then skip them.
+    // The five controls after each Deviation (then Jitter) were its Jitter
+    // Range, which only scaled it. Their places are kept, so that documents
+    // restore the ports after them; each is another kind of control than it
+    // was, so that a document from then rebuilds it, and upgrade_value() gives
+    // it the value that changes nothing. Their names are new: presets of then
+    // skip them.
 
     // Position moves through the sound by itself, at this speed: 1 goes
     // through it in its own duration, -1 backwards, 0 stays at Position
@@ -97,7 +102,10 @@ public:
       static float upgrade_value(float) { return 0.f; }
     } scan;
     halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 0.1}> dur;
-    halp::hslider_f32<"Duration Jitter", halp::range{0., 1., 0.}> dur_j;
+    struct : halp::hslider_f32<"Duration Deviation", halp::range{0., 1., 0.}>
+    {
+      static constexpr std::string_view former_name() noexcept { return "Duration Jitter"; }
+    } dur_j;
     // Each grain somewhere else between the output channels: 0 in all of
     // them alike, 1 anywhere
     struct : halp::hslider_f32<"Stereo Spread", halp::range{0., 1., 0.}>
@@ -108,11 +116,18 @@ public:
     {
       using mapper = halp::inverse_mapper<halp::pow_mapper<4>>;
     } rate;
-    halp::vslider_f32<"Pitch Jitter", halp::range{0., 1., 0.}> rate_j;
-    // Pitch Jitter in whole semitones, the same at every pitch: at 1, 95% of
-    // the grains within an octave; else as a ratio added to Pitch
-    struct : halp::toggle<"Pitch Jitter in Semitones">
+    struct : halp::vslider_f32<"Pitch Deviation", halp::range{0., 1., 0.}>
     {
+      static constexpr std::string_view former_name() noexcept { return "Pitch Jitter"; }
+    } rate_j;
+    // Pitch Deviation in whole semitones, the same at every pitch: at 1, 95% of
+    // the grains within an octave; else as a ratio added to Pitch
+    struct : halp::toggle<"Pitch Deviation in Semitones">
+    {
+      static constexpr std::string_view former_name() noexcept
+      {
+        return "Pitch Jitter in Semitones";
+      }
       static float upgrade_value(float) { return 0.f; }
     } rate_j_semitones;
     halp::toggle<"Reverse"> reverse;
@@ -120,14 +135,20 @@ public:
     {
       using mapper = halp::log_mapper<std::ratio<99, 100>>;
     } density;
-    halp::vslider_f32<"Density Jitter", halp::range{0., 1., 0.}> dens_j;
+    struct : halp::vslider_f32<"Density Deviation", halp::range{0., 1., 0.}>
+    {
+      static constexpr std::string_view former_name() noexcept { return "Density Jitter"; }
+    } dens_j;
     // How likely a grain plays backwards; Reverse flips them all
     struct : halp::knob_f32<"Reverse Chance", halp::range{0., 1., 0.}>
     {
       static float upgrade_value(float) { return 0.f; }
     } reverse_chance;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
-    halp::vslider_f32<"Gain Jitter", halp::range{0., 1., 0.}> gain_j;
+    struct : halp::vslider_f32<"Gain Deviation", halp::range{0., 1., 0.}>
+    {
+      static constexpr std::string_view former_name() noexcept { return "Gain Jitter"; }
+    } gain_j;
     // Unused: free for a control to come, of another kind than a knob
     halp::knob_f32<"Gain Jitter Range", halp::range{0., 1., 1.}> gain_j_r;
     // A bell by default rather than a flat window: Beta(3.3, 3.3), close to
