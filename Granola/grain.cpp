@@ -50,6 +50,12 @@ void GranuGrain::set(
     double region_start, double region_end)
 {
   using namespace std;
+  // Too short to read a grain from, or nothing to read: no grain
+  if(src.frames < 4 || src.channels < 1 || !src.data)
+  {
+    reset();
+    return;
+  }
   m_source = src;
   m_pin = std::move(pin);
   m_buf_len = src.frames - 1;
@@ -68,15 +74,16 @@ void GranuGrain::set(
 
   //  post("shape coef size %ld %f", shape_coef.size(), shape_coef[0] );
 
-  m_region_start = std::clamp(region_start, 0., 1.) * m_buf_len;
-  m_region_len = std::max(
-      (std::clamp(region_end, 0., 1.) - std::clamp(region_start, 0., 1.)) * m_buf_len, 2.);
-  m_region_len = std::max(std::min(m_region_len, m_buf_len - m_region_start), 1.);
+  // In the buffer, a sample at least: its end is the last sample, m_buf_len
+  m_region_start = std::min(std::clamp(region_start, 0., 1.) * m_buf_len, m_buf_len - 1.);
+  m_region_len = std::clamp(
+      (std::clamp(region_end, 0., 1.) - std::clamp(region_start, 0., 1.)) * m_buf_len, 1.,
+      m_buf_len - m_region_start);
 
-  // Within the region, never at 0 exactly
+  // Within the region, a sample before its end at the latest, never at 0
   m_startpoint = std::clamp(
       start * m_buf_len, std::max(m_region_start, 0.00000001 * m_buf_len),
-      m_region_start + m_region_len);
+      m_region_start + m_region_len - 1.);
 
   // duration of grain
   // or if negative use the length of the original sample scaled by ratio
@@ -102,7 +109,8 @@ void GranuGrain::set(
   }
   else
   {
-    // At least a sample: a grain starting at the region's end
+    // Up to the region's end, which is in the buffer; a sample at least, as
+    // the grain starts a sample before it at the latest
     double playmax = std::max(m_region_start + m_region_len - m_startpoint, 1.);
     m_playlen = std::min(round(gr_dur), playmax);
   }
