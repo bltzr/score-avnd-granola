@@ -27,6 +27,8 @@ void Granola::prepare(setup info)
   // host prepares again when the outputs change: the grains then play on.
   if(grains.size() != std::size_t(max_voices))
     resize(max_voices);
+  if(window_tables.size() != std::size_t(window_tables_count))
+    window_tables.resize(window_tables_count);
   set_voice_count(inputs.num_voices);
 }
 
@@ -161,6 +163,25 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
     return;
   ui_heads_shown = ph.count > 0;
   send_message(std::move(msg));
+}
+
+const window_table* Granola::table_for(const window_shape& w) noexcept
+{
+  for(const auto& t : window_tables)
+    if(t.built && t.shape == w)
+      return t.accurate ? &t : nullptr;
+  // Building one costs a few hundred microseconds: only for a new window
+  for(auto& t : window_tables)
+  {
+    const bool read = std::ranges::any_of(
+        grains, [&t](const GranuGrain& g) { return g.m_active && g.m_table == &t; });
+    if(!read)
+    {
+      t.build(w);
+      return t.accurate ? &t : nullptr;
+    }
+  }
+  return nullptr;
 }
 
 void Granola::sanitize_inputs() noexcept
@@ -303,7 +324,12 @@ void Granola::operator()(tick t)
     maxAmp = ampvec[i] > maxAmp ? ampvec[i] : maxAmp;
   }
 
-  boost::container::static_vector<double, 2> windcoef(2, 1.);
+  // The window of the grains made in this tick, and its table, found when a
+  // grain is made
+  const auto window = window_shape::from_pad(
+      int(inputs.window_mode.value), inputs.win_coefs.value.x, inputs.win_coefs.value.y);
+  const window_table* table = nullptr;
+  bool table_found = false;
 
   if(buf_soft_lock)
   {
@@ -469,13 +495,6 @@ void Granola::operator()(tick t)
       {
         if(!grains[i].m_active)
         {
-          windcoef[0] = 1.
-                        + inputs.win_coefs.value.y * wc_radius
-                              * std::cos((1-inputs.win_coefs.value.x) * PI / 2.);
-          windcoef[1] = 1.
-                        + inputs.win_coefs.value.y * wc_radius
-                              * std::sin((1-inputs.win_coefs.value.x) * PI / 2.);
-
           // In the region: fractions of it
           float pos = inputs.pos + float(scan_phase) + spread(inputs.pos_j);
           float dur = (inputs.dur + spread(inputs.dur_j)) * region_len;
@@ -541,9 +560,14 @@ void Granola::operator()(tick t)
           // else never outside of it
           pos = inputs.scan != 0.f ? scanned(pos) : std::clamp(pos, 0.f, 1.f);
           pos = float(region_lo + pos * region_len);
+          if(!table_found)
+          {
+            table = table_for(window);
+            table_found = true;
+          }
           grains[i].set(pos, dur, rate,
-              windcoef, spawn_ampvec, spawn_src, std::move(spawn_pin),
-              inputs.loopmode, inputs.window_mode, ch_offset, n_channels, region_lo,
+              window, table, spawn_ampvec, spawn_src, std::move(spawn_pin),
+              inputs.loopmode, ch_offset, n_channels, region_lo,
               region_lo + region_len);
 
           // Spread: a place x among the output channels, between two of
