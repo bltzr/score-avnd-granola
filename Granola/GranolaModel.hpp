@@ -232,7 +232,8 @@ public:
     // grains among them
     halp::spinbox_i32<"Output Channels", halp::range{0, max_outputs, 0}> out_channels;
     // How Scan goes on at the region's ends: around again, not past them, or
-    // back
+    // back. At the end itself with Wrap at end, else where a whole grain
+    // still fits
     struct
     {
       halp__enum_combobox("Scan Mode", Loop, Straight, Loop, PingPong)
@@ -301,10 +302,11 @@ public:
   double scan_phase{};
   //! Where Scan moves a position of the region, \p rel, to: in it
   float scanned(double rel) const noexcept;
-  //! The last place of the region where a whole grain fits
+  //! Where Scan wraps or turns: the region's end when grains wrap there
+  //! (Wrap at end), else the last place where a whole grain fits
   double scan_last() const noexcept
   {
-    return std::clamp(1. - (double)inputs.dur, 1e-3, 1.);
+    return inputs.loopmode ? 1. : std::clamp(1. - (double)inputs.dur, 1e-3, 1.);
   }
   const void* scan_source{};
   bool scan_was_playing{};
