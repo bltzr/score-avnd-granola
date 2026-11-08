@@ -55,10 +55,6 @@ public:
   // max_channels is how many of a sound's channels a grain reads.
   static constexpr int max_outputs = 1024;
 
-  // The fewest grains per grain length: Density 0 or about, which the knob
-  // goes down to, still makes a grain now and then, and an interval between
-  // grains is never infinite
-  static constexpr double min_density = 1. / 1024.;
   // What Density Deviation multiplies Density by: within this many octaves
   static constexpr double max_density_octaves = 4.;
   static constexpr double max_density_factor = 16.; // 2^max_density_octaves
@@ -99,8 +95,9 @@ public:
     halp::toggle<"Pitch Deviation in Semitones"> rate_j_semitones;
     halp::toggle<"Reverse"> reverse;
     // Grains per grain length. Sample-accurate: automation and cables change
-    // the pace at the sample their values come at, not a block later. Under
-    // min_density it plays at min_density: the grain clock never stops.
+    // the pace at the sample their values come at, not a block later. 0
+    // makes no grains, which a Trigger or a note still makes; any Density
+    // above 0 does, from the sample it comes at.
     struct : halp::accurate<halp::knob_f32<"Density", halp::range{0., 256., 1.}>>
     {
       using mapper = halp::log_mapper<std::ratio<99, 100>>;
@@ -387,7 +384,7 @@ private:
   float deviate(float deviation) noexcept;
   //! Whether the grains read the folder's files: Folder, with a folder set
   bool reads_folder() const noexcept;
-  //! Density at sample \p s of the tick, at least min_density
+  //! Density at sample \p s of the tick, in range
   double density_at(int s) noexcept;
   //! A grain's speed at \p base, with Pitch Deviation and Reverse
   float grain_rate(float base) noexcept;
