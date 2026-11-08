@@ -5,6 +5,8 @@
 // drained as the audio thread. Nothing may crash; the outputs stay finite.
 #include "Granola/Granola.hpp"
 
+#include <ossia/math/safe_math.hpp>
+
 #include <Process/Commands/SetControlValue.hpp>
 #include <Process/ProcessList.hpp>
 #include <Process/Dataflow/Port.hpp>
@@ -249,7 +251,7 @@ struct Mounted
       if(auto* a = o->target<ossia::audio_port>())
         for(auto& chan : *a)
           for(double x : chan)
-            finite &= std::isfinite(x);
+            finite &= ossia::safe_isfinite(x);
     QApplication::processEvents();
   }
   void play(int blocks, int buffer = 512)
@@ -650,3 +652,63 @@ TEST_CASE("The new Granola is another process, without the Jitter Range ports", 
     CHECK(!port_named(g->inlets(), "Reserved"));
   });
 }
+
+TEST_CASE("A document saved by the Granola released first loads as Granola (v1)", "[app][v1]")
+{
+  // Saved by score with the first Granola's own code (origin/main at
+  // a45445a): two of them, values on the Jitter Range ports, a cable from
+  // one's Active Grains into the other's Pitch Jitter Range
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QFile file{QStringLiteral(GRANOLA_V1_DOCUMENT)};
+    REQUIRE(file.open(QIODevice::ReadOnly));
+    auto& delegates = ctx.interfaces<score::DocumentDelegateList>();
+    REQUIRE(!delegates.empty());
+    auto* doc = ctx.docManager.loadDocument(
+        ctx, QStringLiteral("granola-v1"), file.readAll(), JSONObject::type(),
+        *delegates.begin());
+    spin();
+    REQUIRE(doc);
+
+    const auto found = processes_of(*doc, granola_v1_uuid);
+    REQUIRE(found.size() == 2);
+    Process::ProcessModel* g{};
+    for(auto* p : found)
+      if(p->id() == Id<Process::ProcessModel>{2})
+        g = p;
+    REQUIRE(g);
+    QStringList names;
+    for(auto* i : g->inlets())
+      names.push_back(i->name());
+    CHECK(
+        names
+        == QStringList{
+            "Sound", "Position", "Position Jitter", "Position Jitter Range", "Duration",
+            "Duration Jitter", "Duration Jitter Range", "Pitch", "Pitch Jitter",
+            "Pitch Jitter Range", "Reverse", "Density", "Density Jitter",
+            "Density Jitter Range", "Gain", "Gain Jitter", "Gain Jitter Range",
+            "Window coefs", "Interpolation mode", "Window mode", "Loop", "Source Channels",
+            "Channel Offset", "Max Voices", "Continuous", "Trigger", "MIDI In",
+            "listening to MIDI"});
+    const std::vector<std::pair<QString, float>> values{
+        {"Position Jitter", 0.4f},       {"Position Jitter Range", 0.3f},
+        {"Duration Jitter Range", 0.6f}, {"Density Jitter Range", 12.f},
+        {"Gain Jitter Range", 0.25f},    {"Density", 7.f}, {"Pitch Jitter Range", 1.f}};
+    for(auto& [name, v] : values)
+    {
+      CAPTURE(name.toStdString());
+      auto* inlet = qobject_cast<Process::ControlInlet*>(port_named(g->inlets(), name));
+      REQUIRE(inlet);
+      CHECK(ossia::convert<float>(inlet->value()) == v);
+    }
+    auto& cables = scenario_model(*doc).cables;
+    REQUIRE(cables.size() == 1);
+    auto& sink = cables.begin()->sink().find(doc->context());
+    CHECK(&sink == port_named(g->inlets(), "Pitch Jitter Range"));
+
+    // And it plays: the executor of each, built and run
+    auto& plug = load_execution(*doc);
+    run_exec(plug);
+    drain_gc(plug);
+  });
+}
+
