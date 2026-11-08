@@ -4,16 +4,17 @@
 #include <halp/layout.hpp>
 #include <halp/waveform_view.hpp>
 
-#include <QCursor>
+#include <QCollator>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QMenu>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cfloat>
 #include <cstdio>
+#include <optional>
 
 namespace Granola
 {
@@ -201,147 +202,87 @@ struct settable : halp::control<F, L>
   std::function<void(typename halp::control<F, L>::control_value_type)> set;
 };
 
-// A sound file, or a folder, as a chip showing its name: click to choose one,
-// or drop one on it.
-template <bool Folder>
-struct PathChip
+// A file or folder port in score's own widget, with its path for the rest of
+// the panel. `set` edits it, as one undo step.
+template <auto F, halp::look L = halp::look{}>
+struct path_control : halp::item_base
 {
-  static constexpr double width() { return Folder ? 110. : 220.; }
-  static constexpr double height() { return 20.; }
-
+  static constexpr halp::look presentation = L;
+  decltype(F) model = F;
   std::string value;
   std::function<void(std::string)> set;
-  std::function<void()> update;
-
-  void paint(auto ctx)
-  {
-    ctx.begin_path();
-    ctx.set_fill_color(halp::colors::background_darker);
-    ctx.draw_rounded_rect(0., 0., width(), height(), 3.);
-    ctx.fill();
-
-    std::string_view text = Folder ? "Choose a folder…" : "Choose a sound file…";
-    if(!value.empty())
-    {
-      std::string_view v = value;
-      while(v.size() > 1 && (v.back() == '/' || v.back() == '\\'))
-        v.remove_suffix(1);
-      const auto slash = v.find_last_of("/\\");
-      text = slash == std::string_view::npos ? v : v.substr(slash + 1);
-    }
-    ctx.begin_path();
-    ctx.set_fill_color(value.empty() ? halp::colors::mid : halp::colors::lighter);
-    ctx.set_font_size(9.);
-    ctx.draw_text(6., 14., text);
-    ctx.fill();
-  }
-
-  bool mouse_press(double, double)
-  {
-    const QString start = QFileInfo{QString::fromStdString(value)}.absolutePath();
-    QString path;
-    if constexpr(Folder)
-      path = QFileDialog::getExistingDirectory(nullptr, "Folder of sounds", start);
-    else
-      path = QFileDialog::getOpenFileName(
-          nullptr, "Sound file", start, sound_file_filter());
-    if(!path.isEmpty() && set)
-      set(path.toStdString());
-    return true;
-  }
-
-  bool drop(const std::vector<std::string>& paths)
-  {
-    if(paths.empty() || !set)
-      return false;
-    const QFileInfo fi{QString::fromStdString(paths[0])};
-    if(Folder != fi.isDir())
-      return false;
-    set(fi.absoluteFilePath().toStdString());
-    return true;
-  }
-
-  static QString sound_file_filter()
-  {
-    QString filter = "Sound files (";
-    for(const auto& ext :
-        QString::fromUtf8(
-            Granola::sound_extensions.data(), qsizetype(Granola::sound_extensions.size()))
-            .split(' ', Qt::SkipEmptyParts))
-      filter += "*." + ext + " ";
-    return filter.trimmed() + ")";
-  }
 };
+
+inline QString sound_file_filter()
+{
+  QString filter = "Sound files (";
+  for(const auto& ext :
+      QString::fromUtf8(
+          Granola::sound_extensions.data(), qsizetype(Granola::sound_extensions.size()))
+          .split(' ', Qt::SkipEmptyParts))
+    filter += "*." + ext + " ";
+  return filter.trimmed() + ")";
+}
 
 // The sound that plays, drawn by the host, with the grain window, the jitter
 // ranges and the playheads over it; its name, length and channels above.
 // Gestures: horizontal drag = position; vertical drag = duration in the window
 // centre, position jitter at the start edge, duration jitter at the end edge.
 // Empty, a click chooses a sound file, or a folder for the Folder source.
-// The file of the folder that plays, as a chip with its full name: click to
-// pick one of the folder's files. A number (an index sent by automation or a
-// cable) shows as #N.
-struct FolderFilePicker
+// The files of the folder, for the waveform to show the one that plays
+// before the processor runs
+struct FolderFiles
 {
-  static constexpr double width() { return 150.; }
-  static constexpr double height() { return 20.; }
+  // The folder's files, in the order the processor indexes them: natural
+  // order, without case
+  std::string folder;
+  std::string value; // Sound in folder: a file name, or an index
+  QStringList files;
+  void set_folder(const std::string& f)
+  {
+    if(f == folder)
+      return;
+    folder = f;
+    files.clear();
+    if(!folder.empty())
+    {
+      QStringList filters;
+      for(const auto& ext : QString::fromUtf8(
+                                Granola::sound_extensions.data(),
+                                qsizetype(Granola::sound_extensions.size()))
+                                .split(' ', Qt::SkipEmptyParts))
+        filters.push_back("*." + ext);
+      files = QDir{QString::fromStdString(folder)}.entryList(filters, QDir::Files);
+      QCollator order;
+      order.setNumericMode(true);
+      order.setCaseSensitivity(Qt::CaseInsensitive);
+      std::sort(files.begin(), files.end(), order);
+    }
+  }
 
-  std::string value;
-  std::string folder; // synced in ui::on_control_update
-  std::function<void(std::string)> set;
-  std::function<void()> update;
-
-  static bool is_index(const std::string& v)
+  static std::optional<int> as_index(const std::string& v)
   {
     double d{};
-    return !v.empty()
-           && std::from_chars(v.data(), v.data() + v.size(), d).ptr == v.data() + v.size();
+    if(v.empty()
+       || std::from_chars(v.data(), v.data() + v.size(), d).ptr != v.data() + v.size())
+      return std::nullopt;
+    return int(d);
   }
 
-  void paint(auto ctx)
+  // The file that plays: the one picked, the one at an index, or the first
+  // one when the picked one is not in the folder, as the processor does
+  QString current() const
   {
-    ctx.begin_path();
-    ctx.set_fill_color(halp::colors::background_darker);
-    ctx.draw_rounded_rect(0., 0., width(), height(), 3.);
-    ctx.fill();
-
-    std::string text = value;
-    if(value.empty() || value == "-")
-      text = "Choose a file…";
-    else if(is_index(value))
-      text = "#" + value;
-    ctx.begin_path();
-    ctx.set_fill_color(
-        value.empty() || value == "-" ? halp::colors::mid : halp::colors::lighter);
-    ctx.set_font_size(9.);
-    ctx.draw_text(6., 14., text);
-    ctx.fill();
-  }
-
-  bool mouse_press(double, double)
-  {
-    QStringList filters;
-    for(const auto& ext : QString::fromUtf8(
-                              Granola::sound_extensions.data(),
-                              qsizetype(Granola::sound_extensions.size()))
-                              .split(' ', Qt::SkipEmptyParts))
-      filters.push_back("*." + ext);
-    const auto files
-        = QDir{QString::fromStdString(folder)}.entryList(filters, QDir::Files, QDir::Name);
     if(files.empty())
-      return true;
-    QMenu menu;
-    for(const auto& f : files)
-    {
-      auto* a = menu.addAction(f);
-      a->setCheckable(true);
-      a->setChecked(f.toStdString() == value);
-    }
-    if(auto* chosen = menu.exec(QCursor::pos()); chosen && set)
-      set(chosen->text().toStdString());
-    return true;
+      return {};
+    if(auto i = as_index(value))
+      return files[std::clamp(*i, 0, int(files.size()) - 1)];
+    const auto v = QString::fromStdString(value);
+    return files.contains(v) ? v : files.front();
   }
 };
+
+
 
 struct WaveformItem
 {
@@ -361,20 +302,26 @@ struct WaveformItem
   Granola::playheads heads{};
   halp::sound_status status{halp::sound_status::ready};
 
-  // control values, synced in ui::on_control_update
-  float pos{}, pos_j{}, dur{}, dur_j{};
-  float pos_j_r{1.f}, dur_j_r{1.f};
+  // The ports the waveform shows and edits, in the order of ui's
+  // custom_multi_control, normalized: their ranges are [0, 1]. Kept up to date
+  // by the host; a drag edits them through the transaction, as one undo step.
+  enum : int { POS, DUR, POS_J, DUR_J, POS_J_R, DUR_J_R };
+  std::array<double, 6> values{0., 0.1, 0., 0., 1., 1.};
+  halp::multi_transaction transaction;
+  float pos() const noexcept { return float(values[POS]); }
+  float dur() const noexcept { return float(values[DUR]); }
+  float pos_j() const noexcept { return float(values[POS_J]); }
+  float dur_j() const noexcept { return float(values[DUR_J]); }
+  float pos_j_r() const noexcept { return float(values[POS_J_R]); }
+  float dur_j_r() const noexcept { return float(values[DUR_J_R]); }
   bool folder_mode{};
 
   std::function<void()> update;
-  // wired in ui::bus::init to the pos/dur/jitter ports' document values
-  std::function<void(float)> set_pos, set_dur, set_pos_j, set_dur_j;
 
-  // The Sound file's path, and whether the folder was the source, synced in
-  // on_control_update (the ui struct itself only holds widgets)
+  // The Sound file's path, synced in on_control_update (the ui struct itself
+  // only holds widgets)
   std::string sound_path;
-  bool was_folder{};
-  std::string last_folder;
+  FolderFiles folder_files;
   // The folder file the processor plays, while it runs: it follows an index
   // sent to Sound in folder, and the first file when the picked one is not in
   // the folder
@@ -415,13 +362,13 @@ struct WaveformItem
   static constexpr double draw_w() { return width() - left_pad - pad; }
   double win_x0() const
   {
-    return left_pad + std::clamp(double(pos), 0., 1.) * draw_w();
+    return left_pad + std::clamp(double(pos()), 0., 1.) * draw_w();
   }
   double win_x1() const
   {
-    const double wdur = (dur <= 0.f || dur >= 1.f)
+    const double wdur = (dur() <= 0.f || dur() >= 1.f)
                             ? 1.
-                            : std::min(double(pos) + double(dur), 1.) - double(pos);
+                            : std::min(double(pos()) + double(dur()), 1.) - double(pos());
     return std::min(win_x0() + wdur * draw_w(), width() - pad);
   }
 
@@ -474,9 +421,9 @@ struct WaveformItem
         ctx.set_stroke_width(1.);
         ctx.stroke();
       };
-      if(const double pj = pos_j * pos_j_r / 2. * draw_w(); pj > 0.5)
+      if(const double pj = pos_j() * pos_j_r() / 2. * draw_w(); pj > 0.5)
         whisker(x0 - pj, x0 + pj, y0 + 5.);
-      if(const double dj = dur_j * dur_j_r / 2. * draw_w(); dj > 0.5)
+      if(const double dj = dur_j() * dur_j_r() / 2. * draw_w(); dj > 0.5)
         whisker(x1 - dj, x1 + dj, y1 - 5.);
 
       // One bar per playing grain, fading with the grain's window
@@ -524,6 +471,15 @@ struct WaveformItem
     ctx.set_font_size(9.);
     ctx.draw_text(left_pad + 4., pad + 11., label);
     ctx.fill();
+
+    // The header chooses another sound: say so
+    if(!name.empty())
+    {
+      ctx.begin_path();
+      ctx.set_fill_color(halp::colors::mid);
+      ctx.draw_text(width() - pad - 64., pad + 11., folder_mode ? "Folder…" : "Change…");
+      ctx.fill();
+    }
   }
 
   enum class drag_zone
@@ -540,19 +496,21 @@ struct WaveformItem
 
   bool mouse_press(double x, double y)
   {
-    // No sound: choose one
-    if(!has_sound())
+    // No sound, or a click on its name: choose one
+    if(!has_sound() || y < top())
     {
+      const QString current = QString::fromStdString(waveform.file);
       if(folder_mode)
       {
-        const auto dir = QFileDialog::getExistingDirectory(nullptr, "Folder of sounds");
+        const auto dir = QFileDialog::getExistingDirectory(
+            nullptr, "Folder of sounds", QFileInfo{current}.absolutePath());
         if(!dir.isEmpty() && set_folder)
           set_folder(dir.toStdString());
       }
       else
       {
         const auto file = QFileDialog::getOpenFileName(
-            nullptr, "Sound file", {}, PathChip<false>::sound_file_filter());
+            nullptr, "Sound file", current, sound_file_filter());
         if(!file.isEmpty() && set_sound)
           set_sound(file.toStdString());
       }
@@ -561,10 +519,10 @@ struct WaveformItem
 
     m_press_x = x;
     m_press_y = y;
-    m_pos0 = pos;
-    m_dur0 = dur;
-    m_pos_j0 = pos_j;
-    m_dur_j0 = dur_j;
+    m_pos0 = pos();
+    m_dur0 = dur();
+    m_pos_j0 = pos_j();
+    m_dur_j0 = dur_j();
 
     constexpr double edge = 10.;
     const double x0 = win_x0(), x1 = win_x1();
@@ -582,6 +540,8 @@ struct WaveformItem
     else
       m_zone = drag_zone::none;
     m_dragging = true;
+    if(transaction.start)
+      transaction.start();
     return true;
   }
 
@@ -597,30 +557,36 @@ struct WaveformItem
       case drag_zone::window: {
         const float new_dur = std::clamp(m_dur0 + dyn, 1e-8f, 1.f);
         new_pos -= (new_dur - m_dur0) / 2.f;
-        if(set_dur)
-          set_dur(new_dur);
+        set(DUR, new_dur);
         break;
       }
       case drag_zone::start_edge:
-        if(set_pos_j)
-          set_pos_j(std::clamp(m_pos_j0 + dyn, 0.f, 1.f));
+        set(POS_J, std::clamp(m_pos_j0 + dyn, 0.f, 1.f));
         break;
       case drag_zone::end_edge:
-        if(set_dur_j)
-          set_dur_j(std::clamp(m_dur_j0 + dyn, 0.f, 1.f));
+        set(DUR_J, std::clamp(m_dur_j0 + dyn, 0.f, 1.f));
         break;
       default:
         break;
     }
-    if(set_pos)
-      set_pos(std::clamp(new_pos, 1e-8f, 1.f));
+    set(POS, std::clamp(new_pos, 1e-8f, 1.f));
+  }
+
+  void set(int index, float v)
+  {
+    if(transaction.update)
+      transaction.update(index, v);
   }
 
   void mouse_release(double x, double y)
   {
+    if(!m_dragging)
+      return;
     mouse_move(x, y);
     m_dragging = false;
     m_zone = drag_zone::none;
+    if(transaction.commit)
+      transaction.commit();
   }
 };
 
@@ -661,20 +627,30 @@ struct Granola::ui
           {
             halp_meta(name, "File")
             halp_meta(layout, hbox)
-            halp::custom_control<PathChip<false>, &ins::sound> file;
+            // score's own widget for a sound file is a waveform: the one
+            // below is it, with the grains over it
+            path_control<&ins::sound, halp::look{.widget = halp::control_widget::none}>
+                file;
           } file;
           struct
           {
             halp_meta(name, "Folder")
             halp_meta(layout, hbox)
-            halp::custom_control<PathChip<true>, &ins::sounds> folder;
-            halp::custom_control<FolderFilePicker, &ins::sound_file> sound_file;
+            path_control<&ins::sounds> folder;
+            struct : halp::control<&ins::sound_file, bare_dropdown>
+            {
+              // Room for file names, whatever the folder's files are
+              static constexpr double width() { return 150.; }
+            } sound_file;
             halp::item<&ins::random> random;
           } folder;
         } pages;
       } source;
 
-      halp::custom_actions_item<WaveformItem> waveform;
+      halp::custom_multi_control<
+          WaveformItem, &ins::pos, &ins::dur, &ins::pos_j, &ins::dur_j, &ins::pos_j_r,
+          &ins::dur_j_r>
+          waveform;
     } sound;
 
     // The shape of each grain
@@ -708,12 +684,12 @@ struct Granola::ui
       {
         halp_meta(layout, grid)
         halp_meta(columns, 3)
-        settable<&ins::pos, small_knob_as("Position")> position;
-        settable<&ins::pos_j, small_knob_as("Jitter")> pos_jitter;
-        halp::control<&ins::pos_j_r, small_knob_as("Range")> pos_range;
-        settable<&ins::dur, small_knob_as("Duration")> duration;
-        settable<&ins::dur_j, small_knob_as("Jitter")> dur_jitter;
-        halp::control<&ins::dur_j_r, small_knob_as("Range")> dur_range;
+        halp::item<&ins::pos, small_knob_as("Position")> position;
+        halp::item<&ins::pos_j, small_knob_as("Jitter")> pos_jitter;
+        halp::item<&ins::pos_j_r, small_knob_as("Range")> pos_range;
+        halp::item<&ins::dur, small_knob_as("Duration")> duration;
+        halp::item<&ins::dur_j, small_knob_as("Jitter")> dur_jitter;
+        halp::item<&ins::dur_j_r, small_knob_as("Range")> dur_range;
         halp::item<&ins::density, small_knob_as("Density")> density;
         halp::item<&ins::dens_j, small_knob_as("Jitter")> dens_jitter;
         halp::item<&ins::dens_j_r, small_knob_as("Range")> dens_range;
@@ -786,71 +762,17 @@ struct Granola::ui
     if(win.editor.pad.update)
       win.editor.pad.update();
 
-    auto& g = params.grain.knobs;
     auto& src = top.sound.source;
     auto& page = src.pages.folder;
     auto& wf = top.sound.waveform;
-    wf.pos = g.position.value;
-    wf.pos_j = g.pos_jitter.value;
-    wf.pos_j_r = g.pos_range.value;
-    wf.dur = g.duration.value;
-    wf.dur_j = g.dur_jitter.value;
-    wf.dur_j_r = g.dur_range.value;
     wf.sound_path = src.pages.file.file.value;
     wf.folder_mode = from_folder();
     if(wf.update)
       wf.update();
-    // The chips paint their own value: they are not repainted with the layout
-    if(src.pages.file.file.update)
-      src.pages.file.file.update();
-    if(page.folder.update)
-      page.folder.update();
-    page.sound_file.folder = page.folder.value;
-    if(page.sound_file.update)
-      page.sound_file.update();
-
-    // Switching to the folder the first time: the Sound file's folder, with
-    // that file picked, rather than an empty folder.
-    const bool folder = from_folder();
-    if(folder && !wf.was_folder && page.folder.value.empty() && !wf.sound_path.empty())
-    {
-      const QFileInfo fi(QString::fromStdString(wf.sound_path));
-      if(page.folder.set)
-        page.folder.set(fi.absolutePath().toStdString());
-      if(page.sound_file.set)
-        page.sound_file.set(fi.fileName().toStdString());
-    }
-    wf.was_folder = folder;
-
-    // A new folder: when the file picked in the previous one is not in it,
-    // pick its first file. The picker keeps a name it no longer lists, which
-    // left the waveform on a file that is not there while the first one played.
-    if(page.folder.value != wf.last_folder)
-    {
-      wf.last_folder = page.folder.value;
-      const QString dir = QString::fromStdString(page.folder.value);
-      const auto& picked = page.sound_file.value;
-      // A number picks by index: it is not a file to look for
-      double as_index{};
-      const bool is_index
-          = !picked.empty()
-            && std::from_chars(picked.data(), picked.data() + picked.size(), as_index).ptr
-                   == picked.data() + picked.size();
-      if(!dir.isEmpty() && !is_index
-         && (picked.empty() || picked == "-"
-             || !QFileInfo::exists(dir + "/" + QString::fromStdString(picked))))
-      {
-        QStringList filters;
-        for(const auto& ext : QString::fromUtf8(
-                                  sound_extensions.data(),
-                                  qsizetype(sound_extensions.size()))
-                                  .split(' ', Qt::SkipEmptyParts))
-          filters.push_back("*." + ext);
-        const auto files = QDir{dir}.entryList(filters, QDir::Files, QDir::Name);
-        if(!files.empty() && page.sound_file.set)
-          page.sound_file.set(files.front().toStdString());
-      }
-    }
+    // Only the panel changes here: this also runs on undo and redo, where an
+    // edit would cut the redo history.
+    wf.folder_files.set_folder(page.folder.value);
+    wf.folder_files.value = page.sound_file.value;
 
     show_current_sound();
   }
@@ -870,9 +792,10 @@ struct Granola::ui
     if(from_folder())
     {
       file.clear();
-      const std::string& name
-          = !wf.playing_file.empty() ? wf.playing_file : page.sound_file.value;
-      if(!page.folder.value.empty() && !name.empty() && name != "-")
+      const std::string name = !wf.playing_file.empty()
+                                   ? wf.playing_file
+                                   : wf.folder_files.current().toStdString();
+      if(!page.folder.value.empty() && !name.empty())
         file = page.folder.value + "/" + name;
     }
     wf.show_file(file);
@@ -891,26 +814,9 @@ struct Granola::ui
     std::function<void(ui_to_processor)> send_message;
     void init(ui& self)
     {
-      // The waveform's gestures and drops edit the ports' document values. The
+      // Drops and choices on the waveform edit the ports' document values. The
       // controls' `set` hooks are filled by the layout builder (after init).
       auto& wf = self.top.sound.waveform;
-      auto& g = self.params.grain.knobs;
-      wf.set_pos = [&g](float v) {
-        if(g.position.set)
-          g.position.set(v);
-      };
-      wf.set_pos_j = [&g](float v) {
-        if(g.pos_jitter.set)
-          g.pos_jitter.set(v);
-      };
-      wf.set_dur = [&g](float v) {
-        if(g.duration.set)
-          g.duration.set(v);
-      };
-      wf.set_dur_j = [&g](float v) {
-        if(g.dur_jitter.set)
-          g.dur_jitter.set(v);
-      };
       // Drop onto the waveform: a file plays it, a folder plays its files
       auto& src = self.top.sound.source;
       using source_type = std::decay_t<decltype(src.source.value)>;
