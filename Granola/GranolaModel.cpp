@@ -90,6 +90,25 @@ void Granola::clear()
     grain.reset();
 }
 
+float Granola::scanned(double rel) const noexcept
+{
+  using mode = std::decay_t<decltype(inputs.scan_mode.value)>;
+  // Straight and Ping-pong turn at the last place a whole grain fits
+  const double last = scan_last();
+  switch(inputs.scan_mode.value)
+  {
+    case mode::Straight:
+      return float(std::clamp(rel, 0., last));
+    case mode::PingPong: {
+      const double m = rel - 2. * last * std::floor(rel / (2. * last));
+      return float(m <= last ? m : 2. * last - m);
+    }
+    case mode::Loop:
+    default:
+      return float(rel - std::floor(rel));
+  }
+}
+
 int Granola::output_channels(int sound_channels) const noexcept
 {
   const int read = inputs.src_channels <= 0
@@ -116,7 +135,8 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
   processor_to_ui msg{playheads{}};
   auto& ph = ossia::get<playheads>(msg.message);
   ph.count = 0;
-  ph.scan = inputs.scan != 0.f ? std::lround(scan_phase * 65535.) : 0;
+  ph.scanning = inputs.scan != 0.f;
+  ph.scan = ph.scanning ? std::lround(scanned(inputs.pos + scan_phase) * 65535.) : 0;
   for(long i = 0; i < inputs.num_voices && i < (long)grains.size(); i++)
   {
     const auto& g = grains[i];
@@ -360,7 +380,20 @@ void Granola::operator()(tick t)
     if(inputs.playing || midi_active)
     {
       scan_phase += scan_step;
-      scan_phase -= std::floor(scan_phase);
+      using mode = std::decay_t<decltype(inputs.scan_mode.value)>;
+      switch(inputs.scan_mode.value)
+      {
+        case mode::Loop:
+          scan_phase -= std::floor(scan_phase);
+          break;
+        case mode::PingPong: // there and back
+          scan_phase -= 2. * scan_last() * std::floor(scan_phase / (2. * scan_last()));
+          break;
+        case mode::Straight: // stays at the end it reached
+          scan_phase = std::clamp(
+              scan_phase, -(double)inputs.pos, std::max(scan_last() - inputs.pos, 0.));
+          break;
+      }
     }
 
     alloccheck = false;
@@ -452,11 +485,9 @@ void Granola::operator()(tick t)
           dur = std::max(dur, float(min_dur(rate)));
 
           // Past the end with Scan: around again
-          // Past its end with Scan: around again; else never outside of it
-          if(inputs.scan != 0.f)
-            pos -= std::floor(pos);
-          else
-            pos = std::clamp(pos, 0.f, 1.f);
+          // In the region: with Scan, as its mode goes on past the ends;
+          // else never outside of it
+          pos = inputs.scan != 0.f ? scanned(pos) : std::clamp(pos, 0.f, 1.f);
           pos = float(region_lo + pos * region_len);
           grains[i].set(pos, dur, rate,
               windcoef, spawn_ampvec, spawn_src, std::move(spawn_pin),

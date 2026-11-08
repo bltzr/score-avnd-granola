@@ -379,10 +379,7 @@ struct WaveformItem
   // Position, where Scan has moved it while the grains play
   double shown_pos() const
   {
-    if(heads.scan == 0)
-      return pos();
-    const double p = pos() + heads.scan / 65535.;
-    return p - std::floor(p);
+    return heads.scanning ? heads.scan / 65535. : pos();
   }
   double win_x0() const { return x_in_region(shown_pos()); }
   double win_x1() const
@@ -847,6 +844,7 @@ struct Granola::ui
       {
         halp_meta(layout, hbox)
         halp::item<&ins::scan, small_knob_as("Scan")> scan;
+        halp::item<&ins::scan_mode, bare_dropdown> scan_mode;
         halp::item<&ins::scan_across, halp::label_as("Across sounds")> scan_across;
       } scan;
     } play;

@@ -231,6 +231,12 @@ public:
     // How many outputs, 0 as many as the channels read: Spread places the
     // grains among them
     halp::spinbox_i32<"Output Channels", halp::range{0, max_outputs, 0}> out_channels;
+    // How Scan goes on at the region's ends: around again, not past them, or
+    // back
+    struct
+    {
+      halp__enum_combobox("Scan Mode", Loop, Straight, Loop, PingPong)
+    } scan_mode;
 
   } inputs;
 
@@ -258,7 +264,8 @@ public:
   {
     static constexpr int max_heads = 32;
     uint8_t count;
-    uint16_t scan;           // where Scan has moved Position, 0-65535
+    bool scanning;           // whether Scan moves Position, to:
+    uint16_t scan;           // where it has moved it in the region, 0-65535
     uint8_t amp[max_heads];  // window amplitude, 0-255
     uint16_t pos[max_heads]; // position in the current sound, 0-65535
   };
@@ -292,6 +299,13 @@ public:
 
   // Where Scan has moved Position, as a part of the sound
   double scan_phase{};
+  //! Where Scan moves a position of the region, \p rel, to: in it
+  float scanned(double rel) const noexcept;
+  //! The last place of the region where a whole grain fits
+  double scan_last() const noexcept
+  {
+    return std::clamp(1. - (double)inputs.dur, 1e-3, 1.);
+  }
   const void* scan_source{};
   bool scan_was_playing{};
 
