@@ -15,6 +15,7 @@
 #include <halp/folder_combobox.hpp>
 #include <halp/sample_accurate_controls.hpp>
 #include <halp/sound_set.hpp>
+#include <halp/soundfile_port.hpp>
 #include <libremidi/message.hpp>
 #include <rnd/random.hpp>
 
@@ -32,7 +33,7 @@
 namespace Granola
 {
 
-typedef std::vector<GranuGrain> GrainVec;
+
 
 class Granola
 {
@@ -59,7 +60,7 @@ public:
   static constexpr double min_grain_seconds = 0.0005;
 
   // Output Channels: as many as a spatial audio system has loudspeakers.
-  // NCHAN is how many of a sound's channels a grain reads.
+  // max_channels is how many of a sound's channels a grain reads.
   static constexpr int max_outputs = 1024;
 
   struct ins
@@ -130,7 +131,7 @@ public:
       static float upgrade_value(float) { return 0.f; }
     } rate_j_semitones;
     halp::toggle<"Reverse"> reverse;
-    struct : halp::accurate<halp::knob_f32<"Density", halp::range{0., 256., 1.}>>
+    struct : halp::knob_f32<"Density", halp::range{0., 256., 1.}>
     {
       using mapper = halp::log_mapper<std::ratio<99, 100>>;
     } density;
@@ -164,10 +165,10 @@ public:
     } window_mode;
     halp::toggle<"Loop"> loopmode;
     // 0 = all the channels of the sound file
-    struct : halp::spinbox_i32<"Source Channels", halp::range{0, NCHAN, 0}>
+    struct : halp::spinbox_i32<"Source Channels", halp::range{0, max_channels, 0}>
     {
     } src_channels;
-    struct : halp::spinbox_i32<"Channel Offset", halp::range{0, NCHAN - 1, 0}>
+    struct : halp::spinbox_i32<"Channel Offset", halp::range{0, max_channels - 1, 0}>
     {
     } channel_offset;
     struct : halp::spinbox_i32<"Max Voices", halp::range{0, max_voices, 128}>
@@ -319,7 +320,17 @@ public:
     }
   };
 
-  GrainVec grains;
+  std::vector<Grain> grains;
+  // In a block: the sample from which each voice is free, the samples of a
+  // grain per channel, the part of the outputs every one shares per channel,
+  // and the gain (made in prepare())
+  int max_block{512};
+  std::vector<int> free_from;
+  std::vector<double> scratch;
+  std::vector<double> shared;
+  std::vector<double> block_gain;
+  //! Where \p g is among \p places outputs, as Spread says
+  void spread_grain(Grain& g, int places) noexcept;
   // The windows grains read, as tables: a few, as the window may change
   // while grains of the previous ones play (made in prepare())
   static constexpr int window_tables_count = 8;
@@ -328,8 +339,7 @@ public:
   //! none when every table is read by grains of other windows
   const window_table* table_for(const window_shape& w) noexcept;
 
-  std::atomic<bool> buf_soft_lock{false};
-  bool alloccheck{false};
+
   bool trigger{false};
   // Samples since the last grain, with the fraction of a sample the
   // interval had: grains at the rate Density sets, not one rounded to
@@ -344,9 +354,7 @@ public:
   double last_spawn_frames{};
   // Grains made since prepare(): how fast they come, for tests
   uint64_t grains_made{};
-  int busyCount{0};
-  bool useDefaultAmp{true};
-  double maxAmp{0};
+
   float samplerate{48000.f}; // until prepare()
   float sampleinterval;
   double ms2samps;
@@ -395,6 +403,10 @@ private:
     return d;
   }
   rnd::pcg rd{random_source()};
+  // Kept: it makes its values two at a time
+  std::normal_distribution<float> n01{0.f, 1.f};
+  // Where the search for a free voice starts: after the last one taken
+  long next_voice{0};
 };
 
 }
