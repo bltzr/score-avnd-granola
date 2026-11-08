@@ -334,14 +334,17 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
   processor_to_ui msg{playheads{}};
   auto& ph = ossia::get<playheads>(msg.message);
   ph.count = 0;
-  ph.scanning = inputs.scan != 0.f;
+  // Position as the grains of Continuous and Trigger have it: a note's place
+  // with Set position
+  const double base = position_for(-1);
+  ph.scanning = inputs.scan != 0.f || base != inputs.pos;
   // The place of the file shown, Per file
   double at = scan_phase;
   if(ui_shown_index >= 0 && file_scan_count > 0
      && inputs.scan_folder.value == decltype(inputs.scan_folder.value)::PerFile)
     at = file_scan[ui_shown_index % file_scan_count];
   ph.scan = ph.scanning
-                ? uint16_t(std::lround(scanned(inputs.pos + at) * playheads::pos_scale))
+                ? uint16_t(std::lround(scanned(base + at) * playheads::pos_scale))
                 : 0;
   for(long i = 0; i < std::min<long>(inputs.num_voices, (long)grains.size()); i++)
   {
@@ -566,6 +569,12 @@ void Granola::read_midi() noexcept
       midi_held = true;
       midi_pending.set(note);
       latched_note = note;
+      latched_velocity = vel;
+      // Scan moves on from the note's place
+      using on = std::decay_t<decltype(inputs.on_midi.value)>;
+      if(inputs.on_midi.value == on::SetPosition
+         || inputs.on_midi.value == on::TriggerPosition)
+        scan_phase = 0.;
     }
     else if(type == message_type::NOTE_OFF || type == message_type::NOTE_ON)
     {
@@ -575,7 +584,10 @@ void Granola::read_midi() noexcept
       midi_pending.reset(note);
       midi_held = std::ranges::any_of(midi_voices, &MidiVoice::active);
       if(!midi_held && in_effect >= 0)
+      {
         latched_note = in_effect;
+        latched_velocity = midi_voices[in_effect].velocity;
+      }
     }
   }
   // The notes' own grains only with Note pitch; else they may pick files
@@ -638,10 +650,36 @@ float Granola::grain_rate(float base) noexcept
   return backwards ? -rate : rate;
 }
 
+double Granola::velocity_gain(int velocity) const noexcept
+{
+  const double v = std::clamp(velocity, 0, 127) / 127.;
+  const double amount = ossia::safe_isfinite(inputs.velocity.value)
+                            ? std::clamp((double)inputs.velocity.value, 0., 1.)
+                            : 1.;
+  return 1. - amount * (1. - v * v);
+}
+
 bool Granola::notes_trigger() const noexcept
 {
   using on = std::decay_t<decltype(inputs.on_midi.value)>;
-  return inputs.on_midi.value == on::Trigger || inputs.on_midi.value == on::TriggerPitch;
+  const auto m = inputs.on_midi.value;
+  return m == on::Trigger || m == on::TriggerPitch || m == on::TriggerPosition;
+}
+
+double Granola::position_for(int note) const noexcept
+{
+  using on = std::decay_t<decltype(inputs.on_midi.value)>;
+  switch(inputs.on_midi.value)
+  {
+    case on::SetPosition:
+      if(const int held = clock_note(); held >= 0)
+        return note_position(held);
+      return inputs.pos;
+    case on::TriggerPosition:
+      return note >= 0 ? note_position(note) : inputs.pos;
+    default:
+      return inputs.pos;
+  }
 }
 
 float Granola::pitch_for(int note) const noexcept
@@ -832,12 +870,15 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
     // effect at once
     midi_pending.reset(note);
     gp.rate = grain_rate(pitch_for(note));
-    // Square-law velocity: perceptual gain, in the grain's level
-    const double vel = midi_voices[note].velocity / 127.;
-    gp.amp *= vel * vel;
+    gp.amp *= velocity_gain(midi_voices[note].velocity);
   }
   else
   {
+    // Set pitch and Set position: at the velocity of the note they go on with
+    using on = std::decay_t<decltype(inputs.on_midi.value)>;
+    if(inputs.on_midi.value == on::SetPitch || inputs.on_midi.value == on::SetPosition)
+      if(const int n = clock_note(); n >= 0)
+        gp.amp *= velocity_gain(midi_held ? midi_voices[n].velocity : latched_velocity);
     gp.rate = grain_rate(pitch_for(-1));
     trigger = false;
   }
@@ -856,7 +897,7 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
     scan_at = place;
   }
   scan_travel_at_grain = scan_travel;
-  double pos = inputs.pos + scan_at + deviate(inputs.pos_j);
+  double pos = position_for(note) + scan_at + deviate(inputs.pos_j);
   double dur = (inputs.dur + deviate(inputs.dur_j)) * p.region_len;
   dur = std::max(dur, min_duration(gp.rate, gp.source.frames));
   // With Scan, as its mode goes on past the region's ends; else never

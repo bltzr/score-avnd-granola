@@ -734,7 +734,7 @@ TEST_CASE("The panel's Grain, Pitch and Output columns line up", "[app][ui]")
           x[port->port().name()] = port->scenePos().x();
     const std::vector<std::vector<QString>> columns{
         {"Continuous", "Density", "Max Voices", "On MIDI"},
-        {"Trigger", "Density Deviation"},
+        {"Trigger", "Density Deviation", "Velocity"},
         {"Position", "Duration", "Sample Start", "Loop"},
         {"Position Deviation", "Duration Deviation", "Sample End"},
         {"Scan", "Scan Mode", "Scan in folder"},
@@ -904,3 +904,29 @@ TEST_CASE("Source set to Folder as automation does changes nothing else", "[app]
     CHECK(m.play_until([&] { return m.playing_grains(); }));
   });
 }
+
+TEST_CASE("On MIDI's entries reach the processor as chosen", "[app][midi]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    using on = std::decay_t<decltype(G{}.inputs.on_midi.value)>;
+    for(auto [name, want] : std::vector<std::pair<std::string, on>>{
+            {"Trigger", on::Trigger},
+            {"Trigger and set pitch", on::TriggerPitch},
+            {"Nothing", on::Nothing},
+            {"Set pitch", on::SetPitch},
+            {"Set position", on::SetPosition},
+            {"Trigger and set position", on::TriggerPosition},
+            {"Trigger", on::Trigger}})
+    {
+      CAPTURE(name);
+      m.set("On MIDI", name);
+      m.play(3);
+      CHECK(m.object().inputs.on_midi.value == want);
+    }
+  });
+}
+

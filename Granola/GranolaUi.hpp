@@ -828,6 +828,8 @@ struct Granola::ui
         halp::item<&ins::density, small_knob_as("Density")> density;
         halp::item<&ins::dens_j, small_slider_as("Deviation")> dens_jitter;
         halp::item<&ins::num_voices, halp::label_as("Max voices")> voices;
+        // How much velocity sets the level of the notes' grains
+        halp::item<&ins::velocity, small_knob_as("Velocity")> velocity;
       } controls;
       // What MIDI notes do, the files they pick being Order's: under the
       // others, as wide as its longest entry
