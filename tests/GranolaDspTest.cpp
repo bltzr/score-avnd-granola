@@ -106,28 +106,46 @@ TEST_CASE("Scan modes, at the region's end or where a whole grain fits", "[scan]
   }
 }
 
-TEST_CASE("Reverse Chance: that many grains backwards", "[pitch]")
+TEST_CASE("Reverse Chance: that many grains backwards, all at 1, none at 0", "[pitch]")
 {
-  Rig r;
-  r.g->inputs.reverse_chance.value = 0.5f;
-  r.g->inputs.density.value = 200.f;
-  int back = 0, fwd = 0;
-  for(int k = 0; k < 400; k++)
+  for(float chance : {0.f, 0.5f, 1.f})
   {
-    std::vector<double> before;
-    for(auto& gr : r.g->grains)
-      before.push_back(gr.m_active ? gr.position() : -1);
-    r.tick();
-    for(std::size_t i = 0; i < r.g->grains.size(); i++)
+    CAPTURE(chance);
+    Rig r;
+    r.g->inputs.reverse_chance.value = chance;
+    r.g->inputs.density.value = 200.f;
+    int back = 0, fwd = 0;
+    for(int k = 0; k < 400; k++)
     {
-      auto& gr = r.g->grains[i];
-      if(!gr.m_active || before[i] < 0 || gr.position() == before[i])
-        continue;
-      (gr.position() < before[i] ? back : fwd)++;
+      std::vector<double> before;
+      std::vector<long> phase;
+      for(auto& gr : r.g->grains)
+      {
+        before.push_back(gr.m_active ? gr.position() : -1);
+        phase.push_back(gr.m_phase_counter);
+      }
+      r.tick();
+      // The same grain over the whole tick, not another one in its voice
+      for(std::size_t i = 0; i < r.g->grains.size(); i++)
+      {
+        auto& gr = r.g->grains[i];
+        if(!gr.m_active || before[i] < 0 || gr.m_phase_counter != phase[i] + Rig::F
+           || gr.position() == before[i])
+          continue;
+        (gr.position() < before[i] ? back : fwd)++;
+      }
+    }
+    REQUIRE(back + fwd > 100);
+    if(chance == 0.f)
+      CHECK(back == 0);
+    else if(chance == 1.f)
+      CHECK(fwd == 0);
+    else
+    {
+      CHECK(back > 0.35 * (back + fwd));
+      CHECK(back < 0.65 * (back + fwd));
     }
   }
-  CHECK(back > 0.35 * (back + fwd));
-  CHECK(back < 0.65 * (back + fwd));
 }
 
 TEST_CASE("Pitch Deviation in semitones: whole semitones, both ways, forwards", "[pitch]")
@@ -590,7 +608,7 @@ TEST_CASE("The ports, by the names documents and presets find them by", "[ports]
   // another type, drops its value, cables and automation in saved documents
   const std::vector<std::string_view> expected{
       "Sound", "Position", "Position Deviation", "Scan", "Duration", "Duration Deviation",
-      "Spread", "Pitch", "Pitch Deviation", "Pitch Deviation in Semitones", "Reverse",
+      "Spread", "Pitch", "Pitch Deviation", "Pitch Deviation in Semitones",
       "Density", "Density Deviation", "Reverse Chance", "Gain", "Gain Deviation",
       "Window coefs", "Interpolation mode", "Window mode", "Loop",
       "Source Channels", "Channel Offset", "Max Voices", "Continuous", "Trigger",

@@ -93,7 +93,6 @@ public:
     // Pitch Deviation in whole semitones, the same at every pitch: at 1, 95% of
     // the grains within an octave; else as a ratio added to Pitch
     halp::toggle<"Pitch Deviation in Semitones"> rate_j_semitones;
-    halp::toggle<"Reverse"> reverse;
     // Grains per grain length. Sample-accurate: automation and cables change
     // the pace at the sample their values come at, not a block later. 0
     // makes no grains, which a Trigger or a note still makes; any Density
@@ -105,7 +104,7 @@ public:
     // Multiplies Density per grain by 2^N(0, d / 2): at 1, 95% of the
     // intervals between half and twice as long, as many shorter as longer
     halp::vslider_f32<"Density Deviation", halp::range{0., 1., 0.}> dens_j;
-    // How likely a grain plays backwards; Reverse flips them all
+    // How likely a grain plays backwards: 1 all of them
     halp::knob_f32<"Reverse Chance", halp::range{0., 1., 0.}> reverse_chance;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
     // Lowers some grains, in decibels: down to -24 dB at 1, never louder
@@ -386,7 +385,7 @@ private:
   bool reads_folder() const noexcept;
   //! Density at sample \p s of the tick, in range
   double density_at(int s) noexcept;
-  //! A grain's speed at \p base, with Pitch Deviation and Reverse
+  //! A grain's speed at \p base, with Pitch Deviation and Reverse Chance
   float grain_rate(float base) noexcept;
   //! The shortest grain, as a part of a sound of \p frames, at \p rate
   double min_duration(double rate, double frames) const noexcept;

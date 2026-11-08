@@ -413,12 +413,11 @@ float Granola::grain_rate(float base) noexcept
   const float rate = inputs.rate_j_semitones
                          ? base * std::exp2(std::round(deviate(inputs.rate_j) * 24.f) / 12.f)
                          : std::max(base + deviate(inputs.rate_j), base / 16.f);
-  // Backwards only by Reverse, which flips every grain, and Reverse Chance,
-  // which flips some
-  bool backwards = inputs.reverse;
-  if(inputs.reverse_chance > 0.f
-     && std::uniform_real_distribution<float>(0.f, 1.f)(rd) < inputs.reverse_chance)
-    backwards = !backwards;
+  // Backwards as often as Reverse Chance says: never at 0, always at 1
+  const float chance = inputs.reverse_chance;
+  const bool backwards
+      = chance >= 1.f
+        || (chance > 0.f && std::uniform_real_distribution<float>(0.f, 1.f)(rd) < chance);
   return backwards ? -rate : rate;
 }
 
