@@ -173,7 +173,6 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
                         &in.density.value,    &in.dens_j.value,  &in.gain.value,
                         &in.gain_j.value,     &in.spread.value,  &in.reverse_chance.value};
           *f[rng() % std::size(f)] = any_value(rng) * float(1 + rng() % 300);
-          in.reverse.value = rng() % 2;
           in.rate_j_semitones.value = rng() % 2;
           break;
         }

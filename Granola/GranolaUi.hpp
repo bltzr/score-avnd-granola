@@ -725,12 +725,7 @@ struct Granola::ui
         halp::item<&ins::rate_j, small_slider_as("Deviation")> jitter;
         // How many grains play backwards
         halp::item<&ins::reverse_chance, small_knob_as("Backwards")> backwards;
-        struct
-        {
-          halp_meta(layout, vbox)
-          halp::item<&ins::rate_j_semitones, halp::label_as("Semitones")> semitones;
-          halp::item<&ins::reverse> reverse;
-        } toggles;
+        halp::item<&ins::rate_j_semitones, halp::label_as("Semitones")> semitones;
       } knobs;
     } pitch;
 
