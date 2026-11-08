@@ -612,7 +612,7 @@ TEST_CASE("The ports, by the names documents and presets find them by", "[ports]
       "Density", "Density Deviation", "Reverse Chance", "Gain", "Gain Deviation",
       "Window coefs", "Interpolation mode", "Window mode", "Loop",
       "Source Channels", "Channel Offset", "Max Voices", "Continuous", "Trigger",
-      "MIDI In", "listening to MIDI", "Source", "Sounds", "Sound in folder", "Random",
+      "MIDI In", "listening to MIDI", "Source", "Sounds", "Sound in folder", "Sound Order",
       "Scan Across Sounds", "Sample Start", "Sample End", "Output Channels", "Scan Mode"};
   std::vector<std::string_view> names;
   Granola::Granola g;
@@ -874,4 +874,244 @@ TEST_CASE("The panel in Folder with no folder set shows the Sound file, and edit
   u->on_control_update();
   CHECK(u->sound.waveform.waveform.file == "/other/b.wav");
   CHECK(sets == 0);
+}
+
+namespace
+{
+using order = std::decay_t<decltype(Granola::Granola{}.inputs.order.value)>;
+using source_kind = std::decay_t<decltype(Granola::Granola{}.inputs.source.value)>;
+
+// A folder of \p n mono files of a second, each of its own, as the host lists
+// them
+struct Folder
+{
+  std::vector<std::vector<float>> data;
+  std::vector<const float*> ptrs;
+  std::vector<halp::sound_view> views;
+  uint64_t generation{};
+
+  explicit Folder(int n, int frames = Rig::rate)
+      : data(n, std::vector<float>(frames))
+  {
+    for(int k = 0; k < n; k++)
+      for(int i = 0; i < frames; i++)
+        data[k][i] = 0.2f * std::sin(0.01f * (k + 1) * i);
+    for(auto& d : data)
+      ptrs.push_back(d.data());
+    for(int k = 0; k < n; k++)
+      views.push_back(
+          {.name = "f.wav",
+           .data = &ptrs[k],
+           .frames = frames,
+           .channels = 1,
+           .rate = Rig::rate,
+           .status = halp::sound_status::ready});
+  }
+  void into(Granola::Granola& g, order o)
+  {
+    g.inputs.sounds.files = {views, "/folder", ++generation};
+    g.inputs.sounds.value = "/folder";
+    g.inputs.source.value = source_kind::Folder;
+    g.inputs.order.value = o;
+  }
+  void status(int k, halp::sound_status s) { views[k].status = s; }
+  int index_of(const float* const* data) const
+  {
+    for(int k = 0; k < (int)views.size(); k++)
+      if(views[k].data == data)
+        return k;
+    return -1;
+  }
+};
+
+std::vector<int> sequence(Granola::Granola& g, int count, int picked = 0, int note = -1)
+{
+  std::vector<int> res;
+  for(int k = 0; k < count; k++)
+    res.push_back(g.next_in_order(picked, note));
+  return res;
+}
+}
+
+TEST_CASE("Sound Order: Single file plays the picked file, always", "[order]")
+{
+  Rig r;
+  Folder f{4};
+  f.into(*r.g, order::Single);
+  CHECK(sequence(*r.g, 5, 2) == std::vector{2, 2, 2, 2, 2});
+  // Grains read it
+  r.g->inputs.sound_file.value = "2";
+  r.g->inputs.density.value = 20.f;
+  each_grain(r, 50, [&](auto& g) { CHECK(f.index_of(g.m_source.data) == 2); });
+}
+
+TEST_CASE("Sound Order: Alphabetical in the folder's order, around, past unready files", "[order]")
+{
+  Rig r;
+  Folder f{5};
+  f.into(*r.g, order::Alphabetical);
+  CHECK(sequence(*r.g, 7) == std::vector{0, 1, 2, 3, 4, 0, 1});
+  f.status(1, halp::sound_status::loading);
+  f.status(3, halp::sound_status::failed);
+  f.into(*r.g, order::Alphabetical);
+  CHECK(sequence(*r.g, 5) == std::vector{2, 4, 0, 2, 4});
+  // None ready: none, and back once they are
+  for(int k = 0; k < 5; k++)
+    f.status(k, halp::sound_status::loading);
+  CHECK(sequence(*r.g, 2) == std::vector{-1, -1});
+  f.status(3, halp::sound_status::ready);
+  CHECK(sequence(*r.g, 2) == std::vector{3, 3});
+}
+
+TEST_CASE("Sound Order: Ping-pong to the last and back, the ends once", "[order]")
+{
+  Rig r;
+  Folder f{5};
+  f.into(*r.g, order::PingPong);
+  CHECK(sequence(*r.g, 12) == std::vector{0, 1, 2, 3, 4, 3, 2, 1, 0, 1, 2, 3});
+  Rig r2;
+  Folder f2{5};
+  f2.status(2, halp::sound_status::loading);
+  f2.into(*r2.g, order::PingPong);
+  CHECK(sequence(*r2.g, 8) == std::vector{0, 1, 3, 4, 3, 1, 0, 1});
+  Rig r1;
+  Folder one{1};
+  one.into(*r1.g, order::PingPong);
+  CHECK(sequence(*r1.g, 3) == std::vector{0, 0, 0});
+}
+
+TEST_CASE("Sound Order: Shuffle plays every file once a cycle, none twice in a row", "[order]")
+{
+  for(int n : {2, 6, 37, 5000})
+  {
+    CAPTURE(n);
+    Rig r;
+    Folder f{n, 8};
+    f.into(*r.g, order::Shuffle);
+    const int cycles = n > 100 ? 2 : 60;
+    const auto seq = sequence(*r.g, n * cycles);
+    for(int c = 0; c < cycles; c++)
+    {
+      std::vector<int> cycle(seq.begin() + c * n, seq.begin() + (c + 1) * n);
+      std::ranges::sort(cycle);
+      for(int k = 0; k < n; k++)
+        REQUIRE(cycle[k] == k);
+    }
+    for(std::size_t k = 1; k < seq.size(); k++)
+      REQUIRE(seq[k] != seq[k - 1]);
+    // Not always the same order
+    if(n == 6)
+      CHECK(!std::equal(seq.begin(), seq.begin() + n, seq.begin() + n));
+  }
+  // Unready files skipped, the others still once a cycle
+  Rig r;
+  Folder f{6};
+  f.status(4, halp::sound_status::failed);
+  f.into(*r.g, order::Shuffle);
+  auto seq = sequence(*r.g, 5);
+  std::ranges::sort(seq);
+  CHECK(seq == std::vector{0, 1, 2, 3, 5});
+}
+
+TEST_CASE("Sound Order: Random covers the folder evenly", "[order]")
+{
+  Rig r;
+  Folder f{6};
+  f.into(*r.g, order::Random);
+  std::array<int, 6> count{};
+  for(int i : sequence(*r.g, 6000))
+    count[i]++;
+  for(int c : count)
+    CHECK(c == Catch::Approx(1000).epsilon(0.15));
+}
+
+TEST_CASE("Sound Order: Random walk steps to neighbours, back from the ends", "[order]")
+{
+  Rig r;
+  Folder f{10};
+  f.into(*r.g, order::RandomWalk);
+  const auto seq = sequence(*r.g, 4000, 5);
+  std::array<int, 10> visits{};
+  int ones = 0, twos = 0, prev = 5;
+  for(int i : seq)
+  {
+    REQUIRE(i >= 0);
+    REQUIRE(i < 10);
+    const int d = std::abs(i - prev);
+    REQUIRE((d == 1 || d == 2));
+    (d == 1 ? ones : twos)++;
+    visits[i]++;
+    prev = i;
+  }
+  CHECK(double(ones) / seq.size() == Catch::Approx(0.8).margin(0.04));
+  for(int v : visits)
+    CHECK(v > 100);
+  // An unready file: the nearest ready one instead
+  f.status(6, halp::sound_status::loading);
+  f.into(*r.g, order::RandomWalk);
+  for(int i : sequence(*r.g, 500))
+    REQUIRE(i != 6);
+}
+
+TEST_CASE("Sound Order: By MIDI note, the note picks the file and does not transpose", "[order]")
+{
+  Rig r;
+  Folder f{4};
+  f.into(*r.g, order::ByNote);
+  for(auto [n, want] : std::vector<std::pair<int, int>>{
+          {60, 0}, {61, 1}, {63, 3}, {64, 0}, {59, 3}, {48, 0}, {127, 3}, {0, 0}})
+  {
+    CAPTURE(n);
+    CHECK(r.g->next_in_order(2, n) == want);
+  }
+  // Without a note: the picked file
+  CHECK(r.g->next_in_order(2, -1) == 2);
+  // An unready file: the next ready one
+  f.status(1, halp::sound_status::loading);
+  CHECK(r.g->next_in_order(2, 61) == 2);
+
+  // Through MIDI: the grains of note 62 read file 2, at Pitch
+  Rig m{1.};
+  Folder g{4};
+  g.into(*m.g, order::ByNote);
+  m.g->inputs.playing.value = false;
+  m.g->inputs.density.value = 4.f;
+  m.g->inputs.midi.midi_messages.push_back(note(0x90, 62, 100));
+  m.tick();
+  m.g->inputs.midi.midi_messages.clear();
+  int seen = 0;
+  each_grain(m, 50, [&](auto& gr) {
+    CHECK(g.index_of(gr.m_source.data) == 2);
+    seen++;
+  });
+  CHECK(seen > 0);
+  const auto rates = grain_rates(m, 30);
+  REQUIRE(!rates.empty());
+  for(double v : rates)
+    CHECK(v == Catch::Approx(1.).margin(0.01));
+}
+
+TEST_CASE("Sound Order: the grains read the files in order", "[order]")
+{
+  // One grain at a time: 2400 samples apart, longer than a tick
+  Rig r;
+  Folder f{3};
+  f.into(*r.g, order::Alphabetical);
+  r.g->inputs.density.value = 1.f;
+  std::vector<int> files;
+  for(int t = 0; t < 200 && files.size() < 7; t++)
+  {
+    const auto made = r.g->grains_made;
+    r.tick();
+    if(r.g->grains_made == made)
+      continue;
+    REQUIRE(r.g->grains_made == made + 1);
+    const Granola::Grain* newest{};
+    for(auto& g : r.g->grains)
+      if(g.m_active && (!newest || g.m_phase_counter < newest->m_phase_counter))
+        newest = &g;
+    REQUIRE(newest);
+    files.push_back(f.index_of(newest->m_source.data));
+  }
+  CHECK(files == std::vector{0, 1, 2, 0, 1, 2, 0});
 }

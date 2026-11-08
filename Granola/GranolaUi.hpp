@@ -759,7 +759,8 @@ struct Granola::ui
             // Room for file names, whatever the folder's files are
             static constexpr double width() { return 150.; }
           } sound_file;
-          halp::item<&ins::random> random;
+          // Which file each grain plays
+          halp::item<&ins::order, bare_dropdown> order;
         } folder;
       } pages;
       // The part of the sound that plays; also by the handles over the

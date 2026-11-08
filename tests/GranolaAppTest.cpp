@@ -464,7 +464,7 @@ TEST_CASE("A folder dropped, played at random, changed on disk while it plays", 
     m.drop(dir.path(), m.at_waveform(0.5, 80.));
     REQUIRE(m.play_until([&] { return m.playing_grains(); }));
 
-    m.set("Random", true);
+    m.set("Sound Order", std::string("Random"));
     m.set("Scan", 1.f);
     m.set("Scan Across Sounds", true);
     m.play(40);

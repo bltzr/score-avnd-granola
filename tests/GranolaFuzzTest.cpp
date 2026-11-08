@@ -93,6 +93,13 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
     Host h;
     auto& in = h.g->inputs;
     std::vector<std::unique_ptr<Sound>> sounds;
+    // A folder: files of a pool that outlives the grains, as the host's pins
+    // would keep them, in any state
+    std::vector<std::unique_ptr<Sound>> pool;
+    for(int k = 0; k < 8; k++)
+      pool.push_back(std::make_unique<Sound>(std::array{5, 100, 4800}[k % 3], 1 + k % 3, rng));
+    std::vector<halp::sound_view> views;
+    uint64_t generation = 0;
 
     // Sometimes the controls' update() before prepare(), as score does
     if(rng() % 2)
@@ -119,6 +126,28 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
           // The old ones are freed by the host once replaced
           if(sounds.size() > 2)
             sounds.erase(sounds.begin());
+          break;
+        }
+        case 10: { // the folder listed again, its files in any state, any order
+          views.clear();
+          const int count = int(rng() % 7);
+          for(int k = 0; k < count; k++)
+          {
+            auto& snd = *pool[rng() % pool.size()];
+            views.push_back(
+                {.name = "f.wav",
+                 .data = snd.ptrs.data(),
+                 .frames = int64_t(snd.channels[0].size()),
+                 .channels = int32_t(snd.channels.size()),
+                 .rate = 48000,
+                 .status = halp::sound_status(rng() % 4)});
+          }
+          in.sounds.files = {views, "/f", ++generation};
+          in.sounds.value = rng() % 4 ? "/f" : "";
+          in.source.value = decltype(in.source.value)(rng() % 2);
+          // Past the last entry too, as a cable may send
+          in.order.value = decltype(in.order.value)(rng() % 8);
+          in.sound_file.value = std::to_string(int(rng() % 9) - 1);
           break;
         }
         case 1:

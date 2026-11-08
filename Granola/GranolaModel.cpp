@@ -9,6 +9,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <numeric>
 #include <numbers>
 #include <string_view>
 
@@ -34,7 +35,132 @@ void Granola::prepare(setup info)
   scratch.assign(std::size_t(max_channels) * max_block, 0.);
   shared.assign(std::size_t(max_channels) * max_block, 0.);
   block_gain.assign(max_block, 0.);
+  if(shuffle_order.size() != std::size_t(max_shuffle))
+    shuffle_order.assign(max_shuffle, 0);
+  shuffle_n = 0;
   set_voice_count(inputs.num_voices);
+}
+
+int Granola::nearest_ready(int i) const noexcept
+{
+  const int n = (int)inputs.sounds.size();
+  for(int d = 0; d < n; d++)
+  {
+    if(i + d < n && ready(i + d))
+      return i + d;
+    if(d > 0 && i - d >= 0 && ready(i - d))
+      return i - d;
+  }
+  return -1;
+}
+
+void Granola::reshuffle(int n) noexcept
+{
+  shuffle_n = n;
+  shuffle_at = 0;
+  if(n <= int(shuffle_order.size()))
+  {
+    // Fisher-Yates
+    for(int i = 0; i < n; i++)
+      shuffle_order[i] = uint16_t(i);
+    for(int i = n - 1; i > 0; i--)
+      std::swap(shuffle_order[i], shuffle_order[unsigned(rd()) % unsigned(i + 1)]);
+    if(n > 1 && shuffle_order[0] == shuffle_last)
+      std::swap(shuffle_order[0], shuffle_order[1 + unsigned(rd()) % unsigned(n - 1)]);
+    return;
+  }
+  // A multiplier prime with n, found in a few tries; 1 at worst
+  shuffle_a = 1;
+  for(int k = 0; k < 32; k++)
+    if(const uint64_t a = 1 + uint64_t(rd()) % uint64_t(n - 1); std::gcd(a, uint64_t(n)) == 1)
+    {
+      shuffle_a = a;
+      break;
+    }
+  shuffle_b = uint64_t(rd()) % uint64_t(n);
+  if(int(shuffle_b) == shuffle_last)
+    shuffle_b = (shuffle_b + 1) % uint64_t(n);
+}
+
+int Granola::next_in_order(int picked, int note) noexcept
+{
+  using order = std::decay_t<decltype(inputs.order.value)>;
+  const int n = (int)inputs.sounds.size();
+  if(n == 0)
+    return -1;
+  order_at = std::min(order_at, n - 1);
+  switch(inputs.order.value)
+  {
+    case order::Single:
+    default:
+      return picked;
+    case order::Random:
+      return random_ready_index();
+    case order::Alphabetical:
+      for(int k = 1; k <= n; k++)
+        if(const int i = (order_at + k) % n; ready(i))
+          return order_at = i;
+      return -1;
+    case order::PingPong:
+      // 0 1 2 1 0 1 ...: past an end, back the other way
+      for(int k = 0; k < 2 * n; k++)
+      {
+        int i = order_at + order_dir;
+        if(i < 0 || i >= n)
+        {
+          order_dir = -order_dir;
+          i = std::clamp(order_at + order_dir, 0, n - 1);
+        }
+        order_at = i;
+        if(ready(i))
+          return i;
+      }
+      return -1;
+    case order::Shuffle:
+      for(int k = 0; k < n; k++)
+      {
+        if(shuffle_n != n || shuffle_at >= shuffle_n)
+          reshuffle(n);
+        const int at = shuffle_at++;
+        const int i = n <= int(shuffle_order.size())
+                          ? int(shuffle_order[at])
+                          : int((shuffle_a * uint64_t(at) + shuffle_b) % uint64_t(n));
+        if(ready(i))
+          return shuffle_last = i;
+      }
+      return -1;
+    case order::RandomWalk: {
+      // From the picked file; one step mostly, two sometimes, either way,
+      // back from the ends as a reflection
+      if(order_at < 0)
+        order_at = std::max(picked, 0);
+      const int step
+          = (std::uniform_real_distribution<float>(0.f, 1.f)(rd) < 0.8f ? 1 : 2)
+            * (rd() & 1 ? 1 : -1);
+      int i = order_at + step;
+      const int last = n - 1;
+      for(int k = 0; k < 4 && (i < 0 || i > last); k++)
+        i = i < 0 ? -i : 2 * last - i;
+      // Back onto the same file, as two steps from the second one: the
+      // other way instead
+      if(i == order_at && n > 1)
+        i = order_at - step;
+      i = std::clamp(i, 0, last);
+      const int r = nearest_ready(i);
+      if(r >= 0)
+        order_at = r;
+      return r;
+    }
+    case order::ByNote: {
+      if(note < 0)
+        return picked;
+      const int first = ((note - 60) % n + n) % n;
+      for(int k = 0; k < n; k++)
+        if(const int i = (first + k) % n; ready(i))
+          return i;
+      return -1;
+    }
+  }
 }
 
 int Granola::find_folder_index()
@@ -156,7 +282,7 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
   for(long i = 0; i < std::min<long>(inputs.num_voices, (long)grains.size()); i++)
   {
     const auto& g = grains[i];
-    // Only the grains of the sound that is shown: random mode plays others
+    // Only the grains of the sound that is shown: Sound Order plays others
     if(!g.m_active || g.m_source.data != cur.data)
       continue;
     ph.pos[ph.count] = uint16_t(std::lround(g.position() * playheads::pos_scale));
@@ -282,7 +408,7 @@ void Granola::stop_replaced_sound() noexcept
 GrainSource Granola::current_source(bool from_folder, int& index) noexcept
 {
   // The Sound file, or the file of the folder picked by name or index (in
-  // random mode, each grain picks its own and this one is shown)
+  // with a Sound Order, each grain picks its own and this one is shown)
   index = -1;
   if(from_folder)
   {
@@ -479,11 +605,12 @@ Granola::tick_plan Granola::make_plan(const GrainSource& cur, int cur_index, boo
   p.scan_step = inputs.scan / (cur.frames * p.region_len);
   p.scan_end = scan_last();
 
-  // In random folder mode, the length of the file the last grain read: the
-  // next grain comes as that one's length and Density say, not as the
-  // length of the file shown
+  // When Sound Order plays other files than the one shown, the length of
+  // the file the last grain read: the next grain comes as that one's length
+  // and Density say, not as the length of the file shown
+  const bool other_files = from_folder && inputs.order.value != decltype(inputs.order.value)::Single;
   const double frames
-      = from_folder && inputs.random && last_spawn_frames > 0. ? last_spawn_frames : cur.frames;
+      = other_files && last_spawn_frames > 0. ? last_spawn_frames : cur.frames;
   // Samples between grains at a pitch, but for Density: the length of a
   // grain, at least the shortest one, else a Duration ~= 0 (stale or
   // automated) would pack grains back-to-back up to the voice cap
@@ -494,11 +621,14 @@ Granola::tick_plan Granola::make_plan(const GrainSource& cur, int cur_index, boo
   };
   p.interval = interval_at(inputs.rate);
   // MIDI: each held note at its own pace, as its pitch sets the length of
-  // its grains
+  // its grains; By MIDI note, where notes pick files, at Pitch
   if(midi_active)
     for(int n = 0; n < 128; n++)
       if(midi_voices[n].active)
-        p.note_interval[n] = interval_at(inputs.rate * note_ratio(n));
+        p.note_interval[n] = interval_at(
+            from_folder && inputs.order.value == decltype(inputs.order.value)::ByNote
+                ? (double)inputs.rate
+                : inputs.rate * note_ratio(n));
 
   p.gain_step = 1. - std::exp(-1. / (0.005 * samplerate));
   return p;
@@ -560,12 +690,16 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
   // grains around Gain would average out.
   if(inputs.gain_j > 0.f)
     gp.amp = std::pow(10., -std::abs(n01(rd)) * inputs.gain_j * 24. / 20.);
+  // The note of a MIDI grain
+  const int note = midi_active ? midi_pending.first() : -1;
+  const bool by_note
+      = p.from_folder && inputs.order.value == decltype(inputs.order.value)::ByNote;
   // A grain of the folder pins its file, which then outlives changes of the
-  // folder; random mode picks a file per grain
+  // folder; Sound Order picks the file of each grain
   gp.source = p.cur;
   if(p.from_folder)
   {
-    const int idx = inputs.random ? random_ready_index() : p.cur_index;
+    const int idx = next_in_order(p.cur_index, note);
     if(idx >= 0)
     {
       const auto& snd = inputs.sounds[idx];
@@ -577,9 +711,8 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
   {
     // The pitch of the note, from the current Pitch, so that glissandi take
     // effect at once
-    const int note = midi_pending.first();
     midi_pending.reset(note);
-    gp.rate = grain_rate(inputs.rate * note_ratio(note));
+    gp.rate = grain_rate(by_note ? inputs.rate : inputs.rate * note_ratio(note));
     // Square-law velocity: perceptual gain, in the grain's level
     const double vel = midi_voices[note].velocity / 127.;
     gp.amp *= vel * vel;
