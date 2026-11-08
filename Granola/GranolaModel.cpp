@@ -772,7 +772,11 @@ Granola::tick_plan Granola::make_plan(const GrainSource& cur, int cur_index, boo
   // Samples between grains at a pitch, but for Density: the length of a
   // grain, at least the shortest one, else a Duration ~= 0 (stale or
   // automated) would pack grains back-to-back up to the voice cap
+  // Keep time: the length of a grain at speed 1 whatever its pitch, so that
+  // grains of any pitch keep the same pace
   const auto interval_at = [&](double rate) {
+    if(inputs.keep_time)
+      rate = 1.;
     const double dur
         = std::max((double)inputs.dur * p.region_len, min_duration(rate, frames));
     return frames * dur / std::abs(rate);
@@ -899,6 +903,10 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
   scan_travel_at_grain = scan_travel;
   double pos = position_for(note) + scan_at + deviate(inputs.pos_j);
   double dur = (inputs.dur + deviate(inputs.dur_j)) * p.region_len;
+  // Keep time: as much more of the sound as the grain reads faster, for it
+  // to last as long
+  if(inputs.keep_time && ossia::safe_isfinite(gp.rate))
+    dur *= std::abs(gp.rate);
   dur = std::max(dur, min_duration(gp.rate, gp.source.frames));
   // With Scan, as its mode goes on past the region's ends; else never
   // outside of it

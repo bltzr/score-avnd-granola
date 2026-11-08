@@ -206,6 +206,17 @@ public:
     {
       halp_meta(description, "How much MIDI velocity sets the level of the grains")
     } velocity;
+    // Duration as a time rather than a part of the sound: every grain lasts
+    // as long whatever its pitch (Pitch, its Deviation, a note, Backwards),
+    // reading as much more of the sound as it goes faster, and the grains
+    // come at a pace their pitch does not change: notes of any pitch play
+    // theirs at the same instants. A grain still reads no further than the
+    // region: past it, it ends sooner, or with Wrap at end goes around it
+    // once at most.
+    struct : halp::toggle<"Keep time">
+    {
+      halp_meta(description, "Duration is a time: grains last as long and come as often at any pitch")
+    } keep_time;
 
     // Where the sound comes from. Folder with no folder set reads the Sound
     // file, as the file picked in its own folder: switching to Folder plays on

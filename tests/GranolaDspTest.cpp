@@ -613,7 +613,7 @@ TEST_CASE("The ports, by the names documents and presets find them by", "[ports]
       "Density", "Density Deviation", "Reverse Chance", "Gain", "Gain Deviation",
       "Window coefs", "Interpolation mode", "Window mode", "Loop",
       "Source Channels", "Channel Offset", "Max Voices", "Continuous", "Trigger",
-      "MIDI In", "On MIDI", "Velocity", "Source", "Sounds", "Sound in folder", "Sound Order",
+      "MIDI In", "On MIDI", "Velocity", "Keep time", "Source", "Sounds", "Sound in folder", "Sound Order",
       "Scan in folder", "Sample Start", "Sample End", "Output Channels", "Scan Mode"};
   std::vector<std::string_view> names;
   Granola::Granola g;
@@ -1376,6 +1376,107 @@ TEST_CASE("Velocity: how much a note's velocity sets the level of its grains", "
   // Set pitch: the grains of Continuous at the velocity of the note, once
   // released too
   CHECK(level(1.f, 64, on_midi::SetPitch, true) == std::set{std::round(c64 * 1e6) / 1e6});
+}
+
+namespace
+{
+// The samples a single grain sounds for, Triggered once, in the output
+int grain_length(float pitch, bool keep_time, bool backwards = false, float pos = 0.1f,
+                 float dur = 0.05f, bool wrap = false)
+{
+  Rig r{1.};
+  auto& in = r.g->inputs;
+  in.playing.value = false;
+  in.rate.value = pitch;
+  in.keep_time.value = keep_time;
+  in.reverse_chance.value = backwards ? 1.f : 0.f;
+  in.pos.value = pos;
+  in.dur.value = dur;
+  in.loopmode.value = wrap;
+  in.trig.value.emplace();
+  int first = -1, last = -1;
+  long at = 0;
+  for(int t = 0; t < 4 * Rig::rate / Rig::F; t++, at += Rig::F)
+  {
+    r.tick();
+    in.trig.value.reset();
+    for(int s = 0; s < Rig::F; s++)
+      if(r.out[0][s] != 0.)
+      {
+        if(first < 0)
+          first = int(at + s);
+        last = int(at + s);
+      }
+  }
+  return first < 0 ? 0 : last - first + 1;
+}
+}
+
+TEST_CASE("Keep time: a grain lasts as long at any pitch", "[keep-time]")
+{
+  // 0.05 of a second-long sound: 2400 samples at speed 1
+  for(float pitch : {0.5f, 1.f, 2.f})
+  {
+    CAPTURE(pitch);
+    CHECK(grain_length(pitch, true) == Catch::Approx(2400).margin(4));
+    CHECK(grain_length(pitch, true, true) == Catch::Approx(2400).margin(4));
+    CHECK(grain_length(pitch, false) == Catch::Approx(2400 / pitch).margin(4));
+  }
+  // At a pitch where it would read past the region: it ends at its end;
+  // with Wrap at end, it reads the region once at most
+  const int fast = grain_length(8.f, true, false, 0.8f, 0.1f);
+  CHECK(fast == Catch::Approx(0.2 * Rig::rate / 8.).margin(4));
+  const int wrapped = grain_length(8.f, true, false, 0.8f, 0.5f, true);
+  CHECK(wrapped == Catch::Approx(Rig::rate / 8.).margin(4));
+}
+
+TEST_CASE("Keep time: the grains keep their pace whatever their pitch", "[keep-time]")
+{
+  // Continuous: Density 20 of grains 0.05 of a 2 s sound, 200 a second, at
+  // any pitch
+  for(float pitch : {0.5f, 1.f, 2.f})
+  {
+    CAPTURE(pitch);
+    Rig r{2.};
+    r.g->inputs.keep_time.value = true;
+    r.g->inputs.rate.value = pitch;
+    r.run(0.2);
+    CHECK(grains_over(r, 1.) == Catch::Approx(200.).epsilon(0.02));
+  }
+  // Notes 48 and 72 held: their grains start at the same instants (one a
+  // sample at most: a sample apart)
+  for(bool keep : {true, false})
+  {
+    CAPTURE(keep);
+    Folder f{1};
+    auto r = midi_rig(f, on_midi::TriggerPitch, false, false);
+    r->g->inputs.keep_time.value = keep;
+    r->g->inputs.density.value = 1.f;
+    r->g->inputs.midi.midi_messages.push_back(note(0x90, 48, 127));
+    r->g->inputs.midi.midi_messages.push_back(note(0x90, 72, 127));
+    std::vector<long> starts;
+    long at = 0;
+    std::vector<long> before(r->g->grains.size(), -1);
+    for(int t = 0; t < Rig::rate / Rig::F; t++, at += Rig::F)
+    {
+      r->tick();
+      r->g->inputs.midi.midi_messages.clear();
+      for(std::size_t i = 0; i < r->g->grains.size(); i++)
+      {
+        auto& g = r->g->grains[i];
+        const long pc = g.m_active ? long(g.m_phase_counter) : -1;
+        if(pc >= 0 && (before[i] < 0 || pc < before[i]))
+          starts.push_back(at + Rig::F - pc);
+        before[i] = pc;
+      }
+    }
+    std::ranges::sort(starts);
+    REQUIRE(starts.size() >= 8);
+    bool paired = starts.size() % 2 == 0;
+    for(std::size_t k = 0; paired && k + 1 < starts.size(); k += 2)
+      paired = starts[k + 1] - starts[k] <= 1;
+    CHECK(paired == keep);
+  }
 }
 
 TEST_CASE("Sound Order: the grains read the files in order", "[order]")
