@@ -146,7 +146,16 @@ public:
     // note pressed last of those held, and once all are released at the
     // pitch of the last one, until a file is picked by hand or Sound Order
     // changes; at Pitch before any note. A note's pitch is relative to note
-    // 60. Sound Order's By MIDI note picks files from the notes in every one.
+    // 60. Set position: no grain of their own either; Position of the grains
+    // of Continuous and Trigger is the note's place, as Set pitch's pitch
+    // (latched alike). Trigger and set position: a held note plays grains at
+    // Pitch from its own place: slices. A note's place: the region cut in
+    // note_slices, one a key upward from note 60, around every two octaves
+    // ((note - 60) modulo 24), the grain starting at the start of its slice;
+    // Position Deviation spreads around it, and Scan moves on from it, from
+    // where it was when the note was pressed. Sound Order's By MIDI note
+    // picks files from the notes in every one: with the slices, the same key
+    // picks both the file and the slice.
     struct
     {
       halp_meta(
@@ -159,7 +168,9 @@ public:
         Nothing,
         Trigger,
         TriggerPitch,
-        SetPitch
+        SetPitch,
+        SetPosition,
+        TriggerPosition
       } value = TriggerPitch;
       enum widget
       {
@@ -167,11 +178,13 @@ public:
       };
       struct range
       {
-        std::pair<std::string_view, enum_type> values[4]{
+        std::pair<std::string_view, enum_type> values[6]{
             {"Nothing", Nothing},
             {"Trigger", Trigger},
             {"Trigger and set pitch", TriggerPitch},
-            {"Set pitch", SetPitch}};
+            {"Set pitch", SetPitch},
+            {"Set position", SetPosition},
+            {"Trigger and set position", TriggerPosition}};
         enum_type init = TriggerPitch;
       };
       operator enum_type&() noexcept { return value; }
@@ -182,6 +195,17 @@ public:
         return *this;
       }
     } on_midi;
+    // How much a note's velocity sets the level of its grains: the grains a
+    // note plays, and with Set pitch and Set position the grains of
+    // Continuous and Trigger, at the velocity of the note they go on with.
+    // Level 1 - amount (1 - (velocity / 127)^2), squared as loudness goes:
+    // velocity 127 at full level whatever the amount; at 0 velocity is
+    // ignored; at 1, the default, as notes always set it before. Each grain
+    // keeps the level it starts with: no click.
+    struct : halp::knob_f32<"Velocity", halp::range{0., 1., 1.}>
+    {
+      halp_meta(description, "How much MIDI velocity sets the level of the grains")
+    } velocity;
 
     // Where the sound comes from. Folder with no folder set reads the Sound
     // file, as the file picked in its own folder: switching to Folder plays on
@@ -458,6 +482,16 @@ public:
   //! The file of the folder the next grain plays, as Sound Order says, from
   //! \p note when a MIDI note makes it (else -1); -1 for none ready
   int next_in_order(int picked) noexcept;
+  //! On MIDI's slices: so many a span of keys, from note 60
+  static constexpr int note_slices = 24;
+  //! A note's place in the region: the start of its slice
+  static double note_position(int note) noexcept
+  {
+    return double(((note - 60) % note_slices + note_slices) % note_slices) / note_slices;
+  }
+  //! Position for a grain of \p note (-1 for the grains of Continuous and
+  //! Trigger), as On MIDI says
+  double position_for(int note) const noexcept;
   //! The file a MIDI note picks, (note - 60) modulo the number of files, or
   //! the next ready one; -1 for none
   int file_of_note(int note) const noexcept;
@@ -468,6 +502,9 @@ public:
   //! file is picked by hand or Sound Order changes; -1 for none
   int clock_note() const noexcept { return midi_held ? latest_note() : latched_note; }
   int latched_note{-1};
+  int latched_velocity{127};
+  //! The level of a grain of a note of \p velocity, as Velocity says
+  double velocity_gain(int velocity) const noexcept;
   std::size_t latch_picked{};
   int latch_order{-1};
 
