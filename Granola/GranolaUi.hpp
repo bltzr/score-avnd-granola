@@ -21,7 +21,7 @@ namespace Granola
 // window shape. Dragging maps x/y like a pad.
 struct WindowShapeItem
 {
-  static constexpr double width() { return 220.; }
+  static constexpr double width() { return 190.; }
   static constexpr double height() { return 140.; }
 
   halp::xy_type<float> value{};
@@ -206,7 +206,7 @@ struct settable : halp::control<F, L>
 template <bool Folder>
 struct PathChip
 {
-  static constexpr double width() { return Folder ? 160. : 220.; }
+  static constexpr double width() { return Folder ? 110. : 220.; }
   static constexpr double height() { return 20.; }
 
   std::string value;
@@ -283,7 +283,7 @@ struct PathChip
 // cable) shows as #N.
 struct FolderFilePicker
 {
-  static constexpr double width() { return 180.; }
+  static constexpr double width() { return 150.; }
   static constexpr double height() { return 20.; }
 
   std::string value;
@@ -345,7 +345,7 @@ struct FolderFilePicker
 
 struct WaveformItem
 {
-  static constexpr double width() { return 460.; }
+  static constexpr double width() { return 450.; }
   static constexpr double height() { return 160.; }
   static constexpr double pad = 2.;
   static constexpr double left_pad = pad;
@@ -684,7 +684,12 @@ struct Granola::ui
       halp_meta(layout, section)
       halp_meta(background, background_mid)
       halp::control<&ins::window_mode, bare_dropdown> shape;
-      halp::custom_control<WindowShapeItem, &ins::win_coefs> pad;
+      // In a row so that its port sits next to it, not above it
+      struct
+      {
+        halp_meta(layout, hbox)
+        halp::custom_control<WindowShapeItem, &ins::win_coefs> pad;
+      } editor;
     } window;
   } top;
 
@@ -777,9 +782,9 @@ struct Granola::ui
   void on_control_update()
   {
     auto& win = top.window;
-    win.pad.mode = int(win.shape.value);
-    if(win.pad.update)
-      win.pad.update();
+    win.editor.pad.mode = int(win.shape.value);
+    if(win.editor.pad.update)
+      win.editor.pad.update();
 
     auto& g = params.grain.knobs;
     auto& src = top.sound.source;
