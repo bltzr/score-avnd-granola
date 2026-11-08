@@ -451,12 +451,12 @@ struct WaveformItem
     if(name.empty())
       label[0] = 0;
     else if(status == halp::sound_status::failed)
-      std::snprintf(label, sizeof(label), "%s · cannot be decoded", name.c_str());
+      std::snprintf(label, sizeof(label), "%s, cannot be decoded", name.c_str());
     else if(status != halp::sound_status::ready)
-      std::snprintf(label, sizeof(label), "%s · loading", name.c_str());
+      std::snprintf(label, sizeof(label), "%s, loading", name.c_str());
     else if(waveform.duration > 0. && waveform.channels > 0)
       std::snprintf(
-          label, sizeof(label), "%s · %.2f s · %d ch", name.c_str(), waveform.duration,
+          label, sizeof(label), "%s, %.2f s, %d ch", name.c_str(), waveform.duration,
           waveform.channels);
     else
       std::snprintf(label, sizeof(label), "%s", name.c_str());
@@ -471,7 +471,7 @@ struct WaveformItem
     {
       ctx.begin_path();
       ctx.set_fill_color(halp::colors::mid);
-      ctx.draw_text(width() - pad - 64., pad + 11., folder_mode ? "Folder…" : "Change…");
+      ctx.draw_text(width() - pad - 64., pad + 11., folder_mode ? "Folder" : "Change");
       ctx.fill();
     }
   }
