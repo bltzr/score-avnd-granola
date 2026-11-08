@@ -157,8 +157,53 @@ public:
     // it, or by its index in the folder when it gets a number (automation,
     // cables), clipped to the last file
     halp::folder_combobox<"Sound in folder", "Sounds", sound_extensions_lit> sound_file;
-    // Every grain plays a random file of the folder instead
-    halp::toggle<"Random"> random;
+    // Which file of the folder each grain plays. Single file: the one Sound
+    // in folder picks. Random: any, each grain. Shuffle: every file once, in
+    // a random order, then again in another, never the same file twice in a
+    // row. Alphabetical: the next one in the folder's order (as the host
+    // lists it, in natural order), around again after the last. Ping-pong:
+    // to the last and back, the ends once. Random walk: a neighbour, mostly
+    // the next or previous one, sometimes the one after, back from the ends.
+    // By MIDI note: the note picks it, (note - 60) modulo the number of files,
+    // and the note no longer transposes; grains not made by a note play the
+    // picked file. The sequences are the folder's, one for every grain, MIDI
+    // notes too: a chord goes through the files rather than every note of it
+    // playing the same one. Files not decoded yet, or which cannot be, are
+    // skipped.
+    struct
+    {
+      static clang_buggy_consteval auto name() { return "Sound Order"; }
+      enum enum_type
+      {
+        Single,
+        Random,
+        Shuffle,
+        Alphabetical,
+        PingPong,
+        RandomWalk,
+        ByNote
+      } value = Single;
+      enum widget
+      {
+        combobox
+      };
+      struct range
+      {
+        std::pair<std::string_view, enum_type> values[7]{
+            {"Single file", Single},   {"Random", Random},
+            {"Shuffle", Shuffle},      {"Alphabetical", Alphabetical},
+            {"Ping-pong", PingPong},   {"Random walk", RandomWalk},
+            {"By MIDI note", ByNote}};
+        enum_type init = Single;
+      };
+      operator enum_type&() noexcept { return value; }
+      operator const enum_type&() const noexcept { return value; }
+      auto& operator=(enum_type t) noexcept
+      {
+        value = t;
+        return *this;
+      }
+    } order;
     // Scan goes on where it was when another file of the folder plays,
     // rather than from Position again
     halp::toggle<"Scan Across Sounds"> scan_across;
@@ -312,9 +357,33 @@ public:
   std::size_t density_next{};
   // Gain as heard: it follows the control in a few milliseconds
   double gain_now{-1.};
-  // In random folder mode, the length of the file the last grain read: the
-  // next grain comes as that one's length and Density say
+  // When grains play other files of the folder than the one shown, the
+  // length of the file the last grain read: the next grain comes as that
+  // one's length and Density say
   double last_spawn_frames{};
+
+  // Sound Order: where the sequence is, for Alphabetical, Ping-pong and
+  // Random walk; which way Ping-pong goes
+  int order_at{-1};
+  int order_dir{1};
+  // Shuffle: the order of a cycle, made in prepare() for folders of up to
+  // max_shuffle files; past that a permutation i -> (a i + b) mod n, which
+  // takes no memory
+  static constexpr int max_shuffle = 4096;
+  std::vector<uint16_t> shuffle_order;
+  int shuffle_n{}, shuffle_at{}, shuffle_last{-1};
+  uint64_t shuffle_a{1}, shuffle_b{0};
+  //! The file of the folder the next grain plays, as Sound Order says, from
+  //! \p note when a MIDI note makes it (else -1); -1 for none ready
+  int next_in_order(int picked, int note) noexcept;
+  //! Shuffle: a new order of \p n files, not starting with the last one
+  void reshuffle(int n) noexcept;
+  //! The ready file nearest to \p i, first \p i itself; -1 for none
+  int nearest_ready(int i) const noexcept;
+  bool ready(int i) const noexcept
+  {
+    return inputs.sounds[i].status == halp::sound_status::ready;
+  }
   // Grains made since prepare(): how fast they come, for tests
   uint64_t grains_made{};
 
