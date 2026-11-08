@@ -283,10 +283,6 @@ struct WaveformItem
   FolderFiles folder_files;
   // Expires with the panel (the ui struct this is part of)
   std::shared_ptr<char> m_alive = std::make_shared<char>();
-  // The source as last seen, once seen: a switch to the folder is a change
-  // from it, not the panel being built
-  bool seen{};
-  bool was_folder{};
   // The folder file the processor plays, while it runs: it follows an index
   // sent to Sound in folder, and the first file when the picked one is not in
   // the folder
@@ -828,24 +824,10 @@ struct Granola::ui
     auto& wf = sound.waveform;
     wf.sound_path = src.pages.file.file.value;
     wf.folder_mode = from_folder();
-    // Only the panel changes here, but for one case: this also runs on undo
-    // and redo, where an edit would cut the redo history.
+    // Only the panel changes here: this runs for every value a port gets,
+    // from execution too, and on undo and redo
     wf.folder_files.set_folder(page.folder.value);
     wf.folder_files.value = page.sound_file.value;
-
-    // Switching to the folder while it is empty: the Sound file's folder,
-    // with that file picked. score applies these after the switch, and not
-    // when the switch is undone or redone.
-    const bool folder = wf.folder_mode;
-    if(wf.seen && folder && !wf.was_folder && page.folder.value.empty()
-       && !wf.sound_path.empty() && page.folder.set && page.sound_file.set)
-    {
-      const QFileInfo fi(QString::fromStdString(wf.sound_path));
-      page.folder.set(fi.absolutePath().toStdString());
-      page.sound_file.set(fi.fileName().toStdString());
-    }
-    wf.seen = true;
-    wf.was_folder = folder;
 
     show_current_sound();
     if(wf.update)
@@ -858,13 +840,14 @@ struct Granola::ui
     return sound.source.source.value == source_type::Folder;
   }
 
-  // The waveform shows the Sound file, or the file picked in the folder
+  // The waveform shows the Sound file, or the file picked in the folder.
+  // Folder with no folder set: the Sound file, which the processor plays then
   void show_current_sound()
   {
     auto& wf = sound.waveform;
     auto& page = sound.source.pages.folder;
     std::string file = wf.sound_path;
-    if(from_folder())
+    if(from_folder() && !page.folder.value.empty())
     {
       file.clear();
       const std::string name = !wf.playing_file.empty()

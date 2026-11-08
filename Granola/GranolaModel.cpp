@@ -397,6 +397,12 @@ double Granola::density_at(int s) noexcept
   return std::max(density_now, min_density);
 }
 
+bool Granola::reads_folder() const noexcept
+{
+  return inputs.source.value == decltype(inputs.source.value)::Folder
+         && !inputs.sounds.value.empty();
+}
+
 float Granola::grain_rate(float base) noexcept
 {
   // Pitch Deviation in whole semitones (6 a deviation at 1: notes of a scale
@@ -676,7 +682,7 @@ void Granola::operator()(tick t)
   sanitize_inputs();
   stop_replaced_sound();
 
-  const bool from_folder = inputs.source.value == decltype(inputs.source.value)::Folder;
+  const bool from_folder = reads_folder();
   int cur_index = -1;
   const GrainSource cur = current_source(from_folder, cur_index);
   notify_current_sound(cur_index, cur);

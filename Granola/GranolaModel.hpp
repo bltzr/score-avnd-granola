@@ -145,7 +145,9 @@ public:
     halp::midi_bus<"MIDI In", libremidi::message> midi;
     halp::toggle<"listening to MIDI", halp::toggle_setup{.init = true}> midi_gate;
 
-    // Where the sound comes from
+    // Where the sound comes from. Folder with no folder set reads the Sound
+    // file, as the file picked in its own folder: switching to Folder plays on
+    // what played
     struct
     {
       halp__enum_combobox("Source", File, File, Folder)
@@ -383,6 +385,8 @@ private:
 
   //! A Deviation's value for a grain: N(0, d / 4)
   float deviate(float deviation) noexcept;
+  //! Whether the grains read the folder's files: Folder, with a folder set
+  bool reads_folder() const noexcept;
   //! Density at sample \p s of the tick, at least min_density
   double density_at(int s) noexcept;
   //! A grain's speed at \p base, with Pitch Deviation and Reverse
