@@ -1,6 +1,7 @@
 #pragma once
 #include <Granola/GranolaModel.hpp>
 
+#include <score/model/Skin.hpp>
 #include <score/tools/NaturalSort.hpp>
 
 #include <Crousti/SoundSet.hpp>
@@ -212,6 +213,93 @@ consteval bool unit_range()
   constexpr auto r = avnd::get_range<std::decay_t<decltype(Granola::ins{}.*F)>>();
   return r.min >= 0. && r.min < 1e-6 && r.max == 1.;
 }
+
+// Where the sound comes from, as a dropdown of score draws it, with its +/-
+// strip. A click picks the other source, + Folder and - File: the user's
+// pick, which pick() sees, and which fills an empty Folder (see ui::bus).
+struct SourceItem
+{
+  using source_type = std::decay_t<decltype(Granola::ins{}.source.value)>;
+  static constexpr double width() { return 64.; }
+  static constexpr double height() { return 22.; }
+  static constexpr double strip = 12.; // score::Stepper::width
+
+  source_type value{};
+  // Edits the Source port (filled by the host)
+  std::function<void(source_type)> set;
+  std::function<void()> update;
+  // The user picked a source (wired in ui::bus::init)
+  std::function<void(source_type)> pick;
+
+  void paint(auto ctx)
+  {
+    constexpr double w = width(), h = height();
+    // In the colours and font of score's dropdowns
+    const auto& skin = score::Skin::instance();
+    const auto color = [&](const QColor& q) {
+      auto c = ctx.to_rgba(halp::colors::mid);
+      c.r = q.red();
+      c.g = q.green();
+      c.b = q.blue();
+      c.a = q.alpha();
+      return c;
+    };
+    const auto box = color(skin.Emphasis2.main.brush.color());
+    const auto text = color(skin.Base4.main.brush.color());
+
+    // The box, its orange edge
+    ctx.begin_path();
+    ctx.set_fill_color(box);
+    ctx.draw_rounded_rect(1., 1., w - 2., h - 2., 1.);
+    ctx.fill();
+
+    ctx.begin_path();
+    ctx.set_stroke_color(text);
+    ctx.set_stroke_width(2.);
+    ctx.move_to(2., 2.);
+    ctx.line_to(2., h - 2.);
+    ctx.stroke();
+    // The strip: + in its upper half, - in its lower one
+    ctx.begin_path();
+    ctx.set_stroke_width(1.);
+    const double cx = std::round(w - 1. - strip / 2.);
+    const double up = std::round(1. + (h - 2.) / 4.);
+    const double down = std::round(h - 1. - (h - 2.) / 4.);
+    ctx.move_to(cx - 2., up);
+    ctx.line_to(cx + 2., up);
+    ctx.move_to(cx, up - 2.);
+    ctx.line_to(cx, up + 2.);
+    ctx.move_to(cx - 2., down);
+    ctx.line_to(cx + 2., down);
+    ctx.stroke();
+
+    // The source, centred in the box left of the strip
+    const std::string_view name = value == source_type::Folder ? "Folder" : "File";
+    ctx.begin_path();
+    ctx.set_fill_color(text);
+    ctx.set_font(skin.Medium10Pt.family().toStdString());
+    ctx.set_font_size(skin.Medium10Pt.pixelSize());
+    const double left = 5., right = w - 1. - strip;
+    ctx.draw_text(left + (right - left - ctx.text_width(name)) / 2., h / 2. + 4.5, name);
+    ctx.fill();
+  }
+
+  bool mouse_press(double x, double y)
+  {
+    source_type v = value == source_type::Folder ? source_type::File : source_type::Folder;
+    if(x >= width() - 1. - strip)
+      v = y < height() / 2. ? source_type::Folder : source_type::File;
+    if(v == value)
+      return true;
+    if(pick)
+      pick(v);
+    else if(set)
+      set(v);
+    return true;
+  }
+  void mouse_move(double, double) { }
+  void mouse_release(double, double) { }
+};
 
 // The sound that plays, drawn by the host, with the grain window, the
 // deviations and the playheads over it; its name, length and channels above;
@@ -645,7 +733,7 @@ struct Granola::ui
     struct source_t
     {
       halp_meta(layout, hbox)
-      settable<&ins::source, bare_dropdown> source;
+      halp::custom_control<SourceItem, &ins::source> source;
 
       struct pages_t
       {
@@ -888,6 +976,24 @@ struct Granola::ui
           c.set(std::move(v));
         if(src.source.set)
           src.source.set(source_type::Folder);
+      };
+      // The user picks Folder while it is empty: the Sound file's folder, with
+      // that file picked, in the same gesture, one undo step. The Sound file's
+      // path is the one score located; score stores the folder relative to the
+      // document as it stores the folders one picks.
+      src.source.pick = [&src](source_type v) {
+        if(!src.source.set)
+          return;
+        src.source.set(v);
+        auto& page = src.pages.folder;
+        const auto& sound = src.pages.file.file.value;
+        if(v == source_type::Folder && page.folder.value.empty() && !sound.empty()
+           && page.folder.set && page.sound_file.set)
+        {
+          const QFileInfo fi(QString::fromStdString(sound));
+          page.folder.set(fi.absolutePath().toStdString());
+          page.sound_file.set(fi.fileName().toStdString());
+        }
       };
       // A late-created panel asks the processor to resend the current sound.
       send_message(ui_to_processor{});
