@@ -46,6 +46,9 @@ struct Rig
     g->inputs.dur.value = 0.05f;
     g->inputs.density.value = 20.f;
     g->inputs.pos.value = 0.1f;
+    // Every grain in every output alike, as many as the channels read
+    g->inputs.spread.value = 0.f;
+    g->inputs.out_channels.value = 0;
     set_outputs(outputs);
     g->outputs.audio.request_channels = [this](int n) { set_outputs(n); };
     g->send_message = [this](Granola::Granola::processor_to_ui m) {

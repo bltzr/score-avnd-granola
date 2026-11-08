@@ -96,7 +96,10 @@ int Granola::file_of_note(int note) const noexcept
   const int n = (int)inputs.sounds.size();
   if(n == 0)
     return -1;
-  const int first = ((note - 60) % n + n) % n;
+  const auto [lo, hi] = note_range();
+  const int first
+      = hi > lo ? int(std::lround(double(std::clamp(note, lo, hi) - lo) / (hi - lo) * (n - 1)))
+                : 0;
   for(int k = 0; k < n; k++)
     if(const int i = (first + k) % n; ready(i))
       return i;
@@ -334,17 +337,17 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
   processor_to_ui msg{playheads{}};
   auto& ph = ossia::get<playheads>(msg.message);
   ph.count = 0;
-  // Position as the grains of Continuous and Trigger have it: a note's place
+  // Where the grains of Continuous and Trigger start: from a note's place
   // with Set position
-  const double base = position_for(-1);
-  ph.scanning = inputs.scan != 0.f || base != inputs.pos;
+  const bool placed = note_place(-1) >= 0.;
+  ph.scanning = inputs.scan != 0.f || placed;
   // The place of the file shown, Per file
   double at = scan_phase;
   if(ui_shown_index >= 0 && file_scan_count > 0
      && inputs.scan_folder.value == decltype(inputs.scan_folder.value)::PerFile)
     at = file_scan[ui_shown_index % file_scan_count];
   ph.scan = ph.scanning
-                ? uint16_t(std::lround(scanned(base + at) * playheads::pos_scale))
+                ? uint16_t(std::lround(grain_place(-1, at, 0.) * playheads::pos_scale))
                 : 0;
   for(long i = 0; i < std::min<long>(inputs.num_voices, (long)grains.size()); i++)
   {
@@ -570,11 +573,6 @@ void Granola::read_midi() noexcept
       midi_pending.set(note);
       latched_note = note;
       latched_velocity = vel;
-      // Scan moves on from the note's place
-      using on = std::decay_t<decltype(inputs.on_midi.value)>;
-      if(inputs.on_midi.value == on::SetPosition
-         || inputs.on_midi.value == on::TriggerPosition)
-        scan_phase = 0.;
     }
     else if(type == message_type::NOTE_OFF || type == message_type::NOTE_ON)
     {
@@ -666,7 +664,7 @@ bool Granola::notes_trigger() const noexcept
   return m == on::Trigger || m == on::TriggerPitch || m == on::TriggerPosition;
 }
 
-double Granola::position_for(int note) const noexcept
+double Granola::note_place(int note) const noexcept
 {
   using on = std::decay_t<decltype(inputs.on_midi.value)>;
   switch(inputs.on_midi.value)
@@ -674,11 +672,34 @@ double Granola::position_for(int note) const noexcept
     case on::SetPosition:
       if(const int held = clock_note(); held >= 0)
         return note_position(held);
-      return inputs.pos;
+      return -1.;
     case on::TriggerPosition:
-      return note >= 0 ? note_position(note) : inputs.pos;
+      return note >= 0 ? note_position(note) : -1.;
     default:
-      return inputs.pos;
+      return -1.;
+  }
+}
+
+double Granola::grain_place(int note, double scan_at, double deviation) const noexcept
+{
+  const double rel = inputs.pos + scan_at + deviation;
+  const double place = note_place(note);
+  if(place < 0.)
+    return inputs.scan != 0.f ? scanned(rel) : std::clamp(rel, 0., 1.);
+  // From the note's place, folded at the region's ends as Scan Mode says
+  const double x = place + rel;
+  using mode = std::decay_t<decltype(inputs.scan_mode.value)>;
+  switch(inputs.scan_mode.value)
+  {
+    case mode::Straight:
+      return std::clamp(x, 0., 1.);
+    case mode::PingPong: {
+      const double m = x - 2. * std::floor(x / 2.);
+      return m <= 1. ? m : 2. - m;
+    }
+    case mode::Loop:
+    default:
+      return x - std::floor(x);
   }
 }
 
@@ -901,16 +922,13 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
     scan_at = place;
   }
   scan_travel_at_grain = scan_travel;
-  double pos = position_for(note) + scan_at + deviate(inputs.pos_j);
+  const double pos = grain_place(note, scan_at, deviate(inputs.pos_j));
   double dur = (inputs.dur + deviate(inputs.dur_j)) * p.region_len;
   // Keep time: as much more of the sound as the grain reads faster, for it
   // to last as long
   if(inputs.keep_time && ossia::safe_isfinite(gp.rate))
     dur *= std::abs(gp.rate);
   dur = std::max(dur, min_duration(gp.rate, gp.source.frames));
-  // With Scan, as its mode goes on past the region's ends; else never
-  // outside of it
-  pos = inputs.scan != 0.f ? scanned(pos) : std::clamp(pos, 0., 1.);
   gp.start = p.region_lo + pos * p.region_len;
   gp.duration = dur;
   if(!p.table_found)
@@ -1086,7 +1104,7 @@ void Granola::operator()(tick t)
 
   // Values past the tick's last sample, which a host does not send: kept
   density_at(std::numeric_limits<int>::max());
-  outputs.active_grains
+  outputs.active_grains.value
       = (int)std::ranges::count_if(grains, [](const Grain& g) { return g.m_active; });
   send_playheads(t.frames, cur);
 }

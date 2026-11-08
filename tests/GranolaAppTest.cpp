@@ -733,13 +733,13 @@ TEST_CASE("The panel's Grain, Pitch and Output columns line up", "[app][ui]")
         if(m.panel->isAncestorOf(port))
           x[port->port().name()] = port->scenePos().x();
     const std::vector<std::vector<QString>> columns{
-        {"Continuous", "Density", "Max Voices", "On MIDI"},
-        {"Trigger", "Density Deviation", "Velocity"},
+        {"Continuous", "Density", "Max Voices", "Low note", "On MIDI"},
+        {"Trigger", "Density Deviation", "Velocity", "High note"},
         {"Position", "Duration", "Sample Start", "Loop"},
         {"Position Deviation", "Duration Deviation", "Sample End"},
         {"Scan", "Scan Mode", "Scan in folder"},
-        {"Pitch", "Reverse Chance", "Interpolation mode"},
-        {"Pitch Deviation", "Pitch Deviation in Semitones"},
+        {"Pitch", "Pitch Deviation in Semitones", "Interpolation mode"},
+        {"Pitch Deviation", "Reverse Chance"},
         {"Gain", "Spread", "Source Channels"},
         {"Gain Deviation", "Output Channels", "Channel Offset"}};
     for(const auto& column : columns)
@@ -930,3 +930,81 @@ TEST_CASE("On MIDI's entries reach the processor as chosen", "[app][midi]")
   });
 }
 
+
+TEST_CASE("Every dropdown's entries reach the processor as chosen", "[app][ui]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    auto& in = m.object().inputs;
+    // Each entry by its name, as the dropdown sends it, then its index in
+    // the processor
+    const auto check = [&](const QString& port, std::vector<std::string> names, auto get) {
+      for(std::size_t k = 0; k < names.size(); k++)
+      {
+        CAPTURE(port.toStdString(), names[k]);
+        m.set(port, names[k]);
+        m.play(3);
+        CHECK(int(get()) == int(k));
+      }
+    };
+    check("Sound Order",
+          {"Single file", "Random", "Shuffle", "Alphabetical", "Ping-pong", "Random walk",
+           "By MIDI note"},
+          [&] { return in.order.value; });
+    check("Scan in folder", {"Restart", "Continue", "Per file"},
+          [&] { return in.scan_folder.value; });
+    check("Scan Mode", {"Straight", "Loop", "PingPong"}, [&] { return in.scan_mode.value; });
+    check("Source", {"File", "Folder"}, [&] { return in.source.value; });
+    check("Interpolation mode", {"None", "Linear", "Cubic"}, [&] { return in.interp_type.value; });
+    check("Window mode", {"Beta", "Cos", "Kuma"}, [&] { return in.window_mode.value; });
+    check("On MIDI",
+          {"Nothing", "Trigger", "Trigger and set pitch", "Set pitch", "Set position",
+           "Trigger and set position"},
+          [&] { return in.on_midi.value; });
+    // The note range, as its spin boxes send it
+    m.set("Low note", 36);
+    m.set("High note", 39);
+    m.play(3);
+    CHECK(in.low_note.value == 36);
+    CHECK(in.high_note.value == 39);
+  });
+}
+
+TEST_CASE("Values through the ports, as automation sends them, write nothing in the document", "[app][ui]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QTemporaryDir dir;
+    write_wav(dir.filePath("a.wav"), 220, 4800, 1);
+    write_wav(dir.filePath("b.wav"), 330, 4800, 1);
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    m.set("Sound", dir.filePath("a.wav").toStdString());
+    m.set("Sounds", dir.path().toStdString());
+    const int before = doc->commandStack().currentIndex();
+    // Through the ports while it plays, one value after another
+    for(auto [port, v] : std::vector<std::pair<QString, ossia::value>>{
+            {"Source", std::string("Folder")}, {"Sound Order", std::string("Random")},
+            {"Sound in folder", std::string("1")}, {"On MIDI", std::string("Set position")},
+            {"Source", std::string("File")}, {"Source", std::string("Folder")},
+            {"Low note", 40}, {"Scan in folder", std::string("Per file")}})
+    {
+      CAPTURE(port.toStdString());
+      m.inlet(port).setValue(v);
+      m.play(5);
+      spin(10);
+    }
+    CHECK(doc->commandStack().currentIndex() == before);
+    CHECK(text_of(m, "Sounds") == dir.path().toStdString());
+    CHECK(m.object().inputs.low_note.value == 40);
+    // The last values reached the processor
+    CHECK(m.play_until([&] { return m.object().inputs.sounds.size() == 2; }));
+    // An index names the file at that place of the dropdown's list, as score
+    // maps numbers sent to a folder's dropdown
+    CHECK(m.object().inputs.sound_file.value == "b.wav");
+  });
+}

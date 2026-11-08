@@ -830,6 +830,9 @@ struct Granola::ui
         halp::item<&ins::num_voices, halp::label_as("Max voices")> voices;
         // How much velocity sets the level of the notes' grains
         halp::item<&ins::velocity, small_knob_as("Velocity")> velocity;
+        // The keys of On MIDI's slices and of By MIDI note's files, over it
+        halp::item<&ins::low_note, halp::label_as("Low note")> low_note;
+        halp::item<&ins::high_note, halp::label_as("High note")> high_note;
       } controls;
       // What MIDI notes do, the files they pick being Order's: under the
       // others, as wide as its longest entry
@@ -900,9 +903,10 @@ struct Granola::ui
         halp_meta(alignment, halp::alignments::left)
         halp::item<&ins::rate, small_knob_as("Pitch")> pitch;
         halp::item<&ins::rate_j, small_slider_as("Deviation")> jitter;
+        // Under Pitch: the deviation in whole semitones, at any pitch
+        halp::item<&ins::rate_j_semitones, halp::label_as("Semitones")> semitones;
         // How many grains play backwards
         halp::item<&ins::reverse_chance, small_knob_as("Backwards")> backwards;
-        halp::item<&ins::rate_j_semitones, halp::label_as("Semitones")> semitones;
         // How the sound is read between its samples, at any speed
         halp::item<&ins::interp_type, dropdown_as("Interpolation")> interpolation;
       } knobs;

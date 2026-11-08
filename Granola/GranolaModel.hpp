@@ -63,6 +63,7 @@ public:
   {
     struct : halp::soundfile_port<"Sound">
     {
+      halp_meta(description, "The sound file the grains play when Source is File.")
       halp_flag(waveform);
       void update(Granola& self)
       {
@@ -70,71 +71,167 @@ public:
           self.outputs.audio.request_channels(self.output_channels(this->channels()));
       }
     } sound;
-    halp::hslider_f32<"Position", halp::range{0.00000001, 1., 0.00000001}> pos;
+    struct : halp::hslider_f32<"Position", halp::range{0.00000001, 1., 0.00000001}>
+    {
+      halp_meta(
+          description,
+          "Where in the sound grains start, from the region's start (0) to its end (1).")
+    } pos;
     // Each Deviation spreads its control per grain, as a normal distribution
     // of deviation d / 4: at 1, 95% of the grains within ±0.5 of it, of the
     // region for Position and Duration. Density's and Gain's are their own,
     // below.
-    halp::hslider_f32<"Position Deviation", halp::range{0., 1., 0.}> pos_j;
+    struct : halp::hslider_f32<"Position Deviation", halp::range{0., 1., 0.}>
+    {
+      halp_meta(
+          description,
+          "How far each grain's start strays at random around Position, 0 for none.")
+    } pos_j;
     // Position moves through the sound by itself, at this speed: 1 goes
     // through it in its own duration, -1 backwards, 0 stays at Position
-    halp::hslider_f32<"Scan", halp::range{-2., 2., 0.}> scan;
-    halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 0.1}> dur;
-    halp::hslider_f32<"Duration Deviation", halp::range{0., 1., 0.}> dur_j;
+    struct : halp::hslider_f32<"Scan", halp::range{-2., 2., 0.}>
+    {
+      halp_meta(
+          description,
+          "Moves Position through the sound by itself: 1 at the sound's own speed, "
+          "negative backwards, 0 to stay.")
+    } scan;
+    struct : halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 0.1}>
+    {
+      halp_meta(
+          description,
+          "How long each grain is, as a part of the region, from almost nothing to all "
+          "of it (1).")
+    } dur;
+    struct : halp::hslider_f32<"Duration Deviation", halp::range{0., 1., 0.}>
+    {
+      halp_meta(
+          description,
+          "How much the length of each grain varies at random around Duration, 0 for "
+          "none.")
+    } dur_j;
     // Each grain somewhere among the output channels (Output Channels): 0 in
     // all of them alike, 1 between two neighbouring ones (1-D VBAP), 2 in a
     // single one
-    halp::hslider_f32<"Spread", halp::range{0., 2., 0.}> spread;
+    struct : halp::hslider_f32<"Spread", halp::range{0., 2., 1.}>
+    {
+      halp_meta(
+          description,
+          "Where grains sit among the outputs: 0 in all alike, 1 panned between two "
+          "neighbours, 2 in a single one.")
+    } spread;
     struct : halp::knob_f32<"Pitch", halp::range{0.000001, 10., 1.}>
     {
+      halp_meta(
+          description,
+          "How fast grains read the sound: 1 as recorded, 2 an octave up, 0.5 an octave "
+          "down.")
       using mapper = halp::inverse_mapper<halp::pow_mapper<4>>;
     } rate;
-    halp::vslider_f32<"Pitch Deviation", halp::range{0., 1., 0.}> rate_j;
+    struct : halp::vslider_f32<"Pitch Deviation", halp::range{0., 1., 0.}>
+    {
+      halp_meta(
+          description,
+          "How much the pitch of each grain varies at random around Pitch, 0 for none.")
+    } rate_j;
     // Pitch Deviation in whole semitones, the same at every pitch: at 1, 95% of
     // the grains within an octave; else as a ratio added to Pitch
-    halp::toggle<"Pitch Deviation in Semitones"> rate_j_semitones;
+    struct : halp::toggle<"Pitch Deviation in Semitones">
+    {
+      halp_meta(
+          description,
+          "Makes Pitch Deviation pick whole semitones instead of any pitch in between.")
+    } rate_j_semitones;
     // Grains per grain length. Sample-accurate: automation and cables change
     // the pace at the sample their values come at, not a block later. 0
     // makes no grains, which a Trigger or a note still makes; any Density
     // above 0 does, from the sample it comes at.
     struct : halp::accurate<halp::knob_f32<"Density", halp::range{0., 256., 1.}>>
     {
+      halp_meta(
+          description,
+          "How often grains start: 1 starts one as the last one ends, 2 twice as often, "
+          "0 none.")
       using mapper = halp::log_mapper<std::ratio<99, 100>>;
     } density;
     // Multiplies Density per grain by 2^N(0, d / 2): at 1, 95% of the
     // intervals between half and twice as long, as many shorter as longer
-    halp::vslider_f32<"Density Deviation", halp::range{0., 1., 0.}> dens_j;
+    struct : halp::vslider_f32<"Density Deviation", halp::range{0., 1., 0.}>
+    {
+      halp_meta(
+          description,
+          "How irregular the time between grains is, 0 for a steady pulse.")
+    } dens_j;
     // How likely a grain plays backwards: 1 all of them
-    halp::knob_f32<"Reverse Chance", halp::range{0., 1., 0.}> reverse_chance;
-    halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
+    struct : halp::knob_f32<"Reverse Chance", halp::range{0., 1., 0.}>
+    {
+      halp_meta(
+          description,
+          "How likely each grain is to play backwards, from never (0) to always (1).")
+    } reverse_chance;
+    struct : halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}>
+    {
+      halp_meta(description, "The output level, 1 as loud as the sound itself.")
+    } gain;
     // Lowers some grains, in decibels: down to -24 dB at 1, never louder
-    halp::vslider_f32<"Gain Deviation", halp::range{0., 1., 0.}> gain_j;
+    struct : halp::vslider_f32<"Gain Deviation", halp::range{0., 1., 0.}>
+    {
+      halp_meta(
+          description,
+          "How much quieter some grains are at random, down to -24 dB at 1, never "
+          "louder.")
+    } gain_j;
     // A bell by default rather than a flat window: Beta(3.3, 3.3), close to
     // a Hann window (y is scaled by window_shape::radius)
-    halp::xy_pad_f32<"Window coefs", halp::xy_range{.min = 0., .max = 1., .init = {0.5, 0.05}}>
-        win_coefs;
+    struct : halp::xy_pad_f32<"Window coefs", halp::xy_range{.min = 0., .max = 1., .init = {0.5, 0.05}}>
+    {
+      halp_meta(
+          description,
+          "The fade in and out of each grain: up for a sharper peak, left or right to "
+          "move it earlier or later.")
+    } win_coefs;
     struct
     {
+      halp_meta(
+          description,
+          "How the sound is read between its samples: None is grittier, Linear "
+          "smoother, Cubic smoothest.")
       halp__enum_combobox("Interpolation mode", Cubic, None, Linear, Cubic)
     } interp_type;
     struct
     {
+      halp_meta(
+          description,
+          "The family of fade shapes of each grain: Beta, Cos or Kuma.")
       halp__enum_combobox("Window mode", Beta, Beta, Cos, Kuma)
     } window_mode;
-    halp::toggle<"Loop"> loopmode;
+    struct : halp::toggle<"Loop">
+    {
+      halp_meta(
+          description,
+          "Lets a grain that reaches the end of the region go on from its start.")
+    } loopmode;
     // 0 = all the channels of the sound file
     struct : halp::spinbox_i32<"Source Channels", halp::range{0, max_channels, 0}>
     {
+      halp_meta(
+          description,
+          "How many channels of the sound the grains read, 0 for all of them.")
     } src_channels;
     struct : halp::spinbox_i32<"Channel Offset", halp::range{0, max_channels - 1, 0}>
     {
+      halp_meta(
+          description,
+          "The first channel of the sound the grains read, 0 for the first one.")
     } channel_offset;
     struct : halp::spinbox_i32<"Max Voices", halp::range{0, max_voices, 128}>
     {
+      halp_meta(description, "The most grains that may play at once, from 0 to 256.")
       void update(Granola& self) { self.set_voice_count(value); }
     } num_voices;
     struct : halp::toggle<"Continuous", halp::toggle_setup{.init = true}>
     {
+      halp_meta(description, "Plays grains by itself, as often as Density says.")
       // Started: a grain at once, the next one an interval later
       void update(Granola& self)
       {
@@ -148,8 +245,17 @@ public:
         self.clock_started = value;
       }
     } playing;
-    halp::impulse_button<"Trigger"> trig;
-    halp::midi_bus<"MIDI In", libremidi::message> midi;
+    struct : halp::impulse_button<"Trigger">
+    {
+      halp_meta(description, "Plays one grain each time it is pressed.")
+    } trig;
+    struct : halp::midi_bus<"MIDI In", libremidi::message>
+    {
+      halp_meta(
+          description,
+          "MIDI notes that play grains, set their pitch or place, or pick the file, as "
+          "On MIDI and Sound Order say.")
+    } midi;
     // What the notes of MIDI In do. Nothing: no grain, no pitch. Trigger: a
     // held note plays grains at Pitch, at its own pace. Trigger and set
     // pitch: at its pitch, at the pace its pitch makes. Set pitch: no grain
@@ -160,19 +266,25 @@ public:
     // 60. Set position: no grain of their own either; Position of the grains
     // of Continuous and Trigger is the note's place, as Set pitch's pitch
     // (latched alike). Trigger and set position: a held note plays grains at
-    // Pitch from its own place: slices. A note's place: the region cut in
-    // note_slices, one a key upward from note 60, around every two octaves
-    // ((note - 60) modulo 24), the grain starting at the start of its slice;
-    // Position Deviation spreads around it, and Scan moves on from it, from
-    // where it was when the note was pressed. Sound Order's By MIDI note
-    // picks files from the notes in every one: with the slices, the same key
-    // picks both the file and the slice.
+    // Pitch from its own place: slices. A note's place: the region cut in a
+    // slice a key of Low note to High note, Low note's at the region's start,
+    // High note's the last one, the grain starting at the start of its slice;
+    // a note below or above the range plays the slice of its end. The range
+    // sets places and files, never the pitch, which stays relative to 60.
+    // Position and Scan's travel are offsets from it, which a note does not
+    // reset, and Position Deviation spreads around that. Past the region's
+    // end, or before its start, the place goes on as Scan Mode says, at the
+    // region's ends themselves since the slices span all of it: around
+    // (Loop), back (Ping-pong) or held there (Straight). Sound Order's By MIDI note
+    // picks files from the notes of the same range in every one: with the
+    // slices, the same key picks both the file and the slice.
     struct
     {
       halp_meta(
           description,
-          "What MIDI notes do: play grains while held, at Pitch or at their pitch, or "
-          "transpose the grains of Continuous and Trigger")
+          "What MIDI notes do: nothing; play grains while held, at Pitch or at their "
+          "own pitch; set the pitch or the place of the other grains; or play grains "
+          "from their own place.")
       static clang_buggy_consteval auto name() { return "On MIDI"; }
       enum enum_type
       {
@@ -215,7 +327,10 @@ public:
     // keeps the level it starts with: no click.
     struct : halp::knob_f32<"Velocity", halp::range{0., 1., 1.}>
     {
-      halp_meta(description, "How much MIDI velocity sets the level of the grains")
+      halp_meta(
+          description,
+          "How much MIDI velocity sets the level of the grains: 0 ignores it, 1 follows "
+          "it fully.")
     } velocity;
     // Duration as a time rather than a part of the sound: every grain lasts
     // as long whatever its pitch (Pitch, its Deviation, a note, Backwards),
@@ -226,7 +341,9 @@ public:
     // once at most.
     struct : halp::toggle<"Keep time">
     {
-      halp_meta(description, "Duration is a time: grains last as long and come as often at any pitch")
+      halp_meta(
+          description,
+          "Keeps the length of the grains and their pace the same at any pitch.")
     } keep_time;
 
     // Where the sound comes from. Folder with no folder set reads the Sound
@@ -234,17 +351,29 @@ public:
     // what played
     struct
     {
+      halp_meta(
+          description,
+          "Where the sound comes from: one sound file, or a folder of them.")
       halp__enum_combobox("Source", File, File, Folder)
     } source;
     // Folder source: the host lists, decodes and watches the folder
     struct : halp::sound_set<"Sounds">
     {
+      halp_meta(
+          description,
+          "The folder of sound files the grains play when Source is Folder.")
       static constexpr std::string_view extensions() { return sound_extensions; }
     } sounds;
     // The file of the folder that plays: by name, so that adding files keeps
     // it, or by its index in the folder when it gets a number (automation,
     // cables), clipped to the last file
-    halp::folder_combobox<"Sound in folder", "Sounds", sound_extensions_lit> sound_file;
+    struct : halp::folder_combobox<"Sound in folder", "Sounds", sound_extensions_lit>
+    {
+      halp_meta(
+          description,
+          "The file of the folder that plays, by its name or by its number in the "
+          "folder.")
+    } sound_file;
     // Which file of the folder each grain plays. Single file: the one Sound
     // in folder picks. Random: any, each grain. Shuffle: every file once, in
     // a random order, then again in another, never the same file twice in a
@@ -252,8 +381,12 @@ public:
     // lists it, in natural order), around again after the last. Ping-pong:
     // to the last and back, the ends once. Random walk: a neighbour, mostly
     // the next or previous one, sometimes the one after, back from the ends.
-    // By MIDI note: a note of MIDI In picks it, (note - 60) modulo the
-    // number of files, whatever On MIDI says: the grains a note plays read
+    // By MIDI note: a note of MIDI In picks it, whatever On MIDI says: the
+    // keys of Low note to High note spread over the files, Low note the
+    // first, High note the last, the others the nearest file to their place
+    // between (several keys a file when there are fewer files than keys,
+    // files between keys when there are more); a note out of the range
+    // picks the file of its end: the grains a note plays read
     // its file; the grains of Continuous and Trigger read the file of the
     // note pressed last of the held ones, and once all are released the file
     // of the last one, until a file is picked by hand in Sound in folder or
@@ -264,6 +397,11 @@ public:
     // cannot be, are skipped.
     struct
     {
+      halp_meta(
+          description,
+          "Which file of the folder each grain plays: the picked one, any at random, "
+          "each once shuffled, in order, back and forth, a neighbour, or the one of the "
+          "MIDI note.")
       static clang_buggy_consteval auto name() { return "Sound Order"; }
       enum enum_type
       {
@@ -307,8 +445,8 @@ public:
     {
       halp_meta(
           description,
-          "Folder only: when another file plays, Scan restarts from Position, continues, "
-          "or goes on where that file's grains were")
+          "With a folder, where Scan goes on when another file plays: from Position "
+          "again, where it was, or where that file was left.")
       static clang_buggy_consteval auto name() { return "Scan in folder"; }
       enum enum_type
       {
@@ -337,25 +475,67 @@ public:
     // The part of the sound that plays: Position, Duration and their
     // Deviations are fractions of it, Scan goes through it, Loop wraps in
     // it, and no grain reads outside of it
-    halp::hslider_f32<"Sample Start", halp::range{0., 1., 0.}> sample_start;
-    halp::hslider_f32<"Sample End", halp::range{0., 1., 1.}> sample_end;
+    struct : halp::hslider_f32<"Sample Start", halp::range{0., 1., 0.}>
+    {
+      halp_meta(
+          description,
+          "Where the part of the sound that plays begins, 0 for the start of the sound.")
+    } sample_start;
+    struct : halp::hslider_f32<"Sample End", halp::range{0., 1., 1.}>
+    {
+      halp_meta(
+          description,
+          "Where the part of the sound that plays ends, 1 for the end of the sound.")
+    } sample_end;
     // How many outputs, 0 as many as the channels read: Spread places the
     // grains among them
-    halp::spinbox_i32<"Output Channels", halp::range{0, max_outputs, 0}> out_channels;
+    struct : halp::spinbox_i32<"Output Channels", halp::range{0, max_outputs, 2}>
+    {
+      halp_meta(
+          description,
+          "How many outputs the grains are spread over, 0 for as many as the sound "
+          "channels read.")
+    } out_channels;
     // How Scan goes on at the region's ends: around again, not past them, or
     // back. At the end itself with Wrap at end, else where a whole grain
     // still fits
     struct
     {
+      halp_meta(
+          description,
+          "What Scan does at the end of the region: Loop starts over, Straight stops "
+          "there, PingPong turns back.")
       halp__enum_combobox("Scan Mode", Loop, Straight, Loop, PingPong)
     } scan_mode;
+    // The keys whose notes span the region (On MIDI's slices) and the
+    // folder's files (Sound Order's By MIDI note), whichever is higher
+    struct : halp::spinbox_i32<"Low note", halp::range{0, 127, 48}>
+    {
+      halp_meta(
+          description,
+          "The MIDI note that plays from the start of the region and picks the first "
+          "file of the folder.")
+    } low_note;
+    struct : halp::spinbox_i32<"High note", halp::range{0, 127, 72}>
+    {
+      halp_meta(
+          description,
+          "The MIDI note that plays the last part of the region and picks the last file "
+          "of the folder.")
+    } high_note;
 
   } inputs;
 
   struct
   {
-    halp::variable_audio_bus<"Output", double> audio;
-    halp::val_port<"Active Grains", int> active_grains;
+    struct : halp::variable_audio_bus<"Output", double>
+    {
+      halp_meta(description, "The grains, on as many channels as Output Channels says.")
+    } audio;
+    struct : halp::val_port<"Active Grains", int>
+    {
+      halp_meta(description, "How many grains are playing.")
+    } active_grains;
   } outputs;
 
   struct ui;
@@ -506,18 +686,28 @@ public:
   //! The file of the folder the next grain plays, as Sound Order says, from
   //! \p note when a MIDI note makes it (else -1); -1 for none ready
   int next_in_order(int picked) noexcept;
-  //! On MIDI's slices: so many a span of keys, from note 60
-  static constexpr int note_slices = 24;
-  //! A note's place in the region: the start of its slice
-  static double note_position(int note) noexcept
+  //! Low note and High note, the lower first
+  std::pair<int, int> note_range() const noexcept
   {
-    return double(((note - 60) % note_slices + note_slices) % note_slices) / note_slices;
+    const int a = std::clamp((int)inputs.low_note.value, 0, 127);
+    const int b = std::clamp((int)inputs.high_note.value, 0, 127);
+    return {std::min(a, b), std::max(a, b)};
   }
-  //! Position for a grain of \p note (-1 for the grains of Continuous and
-  //! Trigger), as On MIDI says
-  double position_for(int note) const noexcept;
-  //! The file a MIDI note picks, (note - 60) modulo the number of files, or
-  //! the next ready one; -1 for none
+  //! A note's place in the region: the start of its slice, of a slice a key
+  //! of the range
+  double note_position(int note) const noexcept
+  {
+    const auto [lo, hi] = note_range();
+    return double(std::clamp(note, lo, hi) - lo) / double(hi - lo + 1);
+  }
+  //! The note's place of a grain of \p note (-1 for the grains of Continuous
+  //! and Trigger), as On MIDI says; -1 when no note places it
+  double note_place(int note) const noexcept;
+  //! Where a grain of \p note starts, a part of the region: Position, Scan's
+  //! place \p scan_at and \p deviation, from the note's place if any
+  double grain_place(int note, double scan_at, double deviation) const noexcept;
+  //! The file a MIDI note picks, its key's place in the range among the
+  //! files, or the next ready one; -1 for none
   int file_of_note(int note) const noexcept;
   //! Of the held notes, the one pressed last; -1 for none
   int latest_note() const noexcept;
