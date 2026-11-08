@@ -848,19 +848,19 @@ TEST_CASE("The panel in Folder with no folder set shows the Sound file, and edit
   auto u = std::make_unique<Granola::Granola::ui>();
   auto& src = u->sound.source;
   int sets = 0;
-  src.source.set = [&](auto) { sets++; };
+  src.selector.box.source.set = [&](auto) { sets++; };
   src.pages.file.file.set = [&](auto) { sets++; };
   src.pages.folder.folder.set = [&](auto) { sets++; };
   src.pages.folder.sound_file.set = [&](auto) { sets++; };
 
   src.pages.file.file.value = "/sounds/a.wav";
-  src.source.value = source::File;
+  src.selector.box.source.value = source::File;
   u->on_control_update();
   CHECK(u->sound.waveform.waveform.file == "/sounds/a.wav");
 
   // Switched to Folder, as automation, a cable or the user would: the Sound
   // file still, and no port edited
-  src.source.value = source::Folder;
+  src.selector.box.source.value = source::Folder;
   u->on_control_update();
   CHECK(u->sound.waveform.waveform.file == "/sounds/a.wav");
   CHECK(u->sound.waveform.folder_mode);
