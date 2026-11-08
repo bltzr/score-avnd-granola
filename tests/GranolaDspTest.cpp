@@ -1115,3 +1115,67 @@ TEST_CASE("Sound Order: the grains read the files in order", "[order]")
   }
   CHECK(files == std::vector{0, 1, 2, 0, 1, 2, 0});
 }
+
+TEST_CASE("Scan's play zone moves on whichever files of the folder the grains play", "[scan][folder]")
+{
+  using G = Granola::Granola;
+  // Few grains on the file shown among many: the play zone the panel draws
+  // still follows Scan, without standing still then jumping
+  for(auto o : {order::Random, order::Alphabetical, order::Shuffle, order::RandomWalk})
+    for(bool across : {false, true})
+    {
+      CAPTURE(int(o), across);
+      Rig r;
+      Folder f{40};
+      f.into(*r.g, o);
+      r.g->inputs.density.value = 2.f;
+      r.g->inputs.scan.value = 1.f;
+      r.g->inputs.scan_across.value = across;
+      std::vector<std::pair<long, int>> zone; // when, where
+      long now = 0;
+      r.g->send_message = [&](G::processor_to_ui m) {
+        if(auto* h = ossia::get_if<G::playheads>(&m.message); h && h->scanning)
+          zone.emplace_back(now, h->scan);
+      };
+      for(int t = 0; t < 2 * Rig::rate / Rig::F; t++, now += Rig::F)
+        r.tick();
+      // A message a 30th of a second at most, at the end of a tick
+      REQUIRE(zone.size() > 40);
+      // Each as far from the last as Scan went meanwhile: through the file in
+      // a second, around at the last place a grain fits
+      const double around = r.g->scan_last() * G::playheads::pos_scale;
+      for(std::size_t k = 1; k < zone.size(); k++)
+      {
+        const double expected
+            = double(zone[k].first - zone[k - 1].first) / Rig::rate * G::playheads::pos_scale;
+        const double d = zone[k].second - zone[k - 1].second;
+        const bool step = std::abs(d - expected) < 200. || std::abs(d + around - expected) < 200.;
+        CAPTURE(k, d, expected);
+        REQUIRE(step);
+      }
+    }
+}
+
+TEST_CASE("Scan Across Sounds: Scan goes on when another file of the folder is picked", "[scan][folder]")
+{
+  for(bool across : {false, true})
+  {
+    CAPTURE(across);
+    Rig r;
+    Folder f{3, Rig::rate / 2};
+    f.into(*r.g, order::Single);
+    r.g->inputs.pos.value = 0.1f;
+    r.g->inputs.scan.value = 1.f;
+    r.g->inputs.scan_across.value = across;
+    r.g->inputs.sound_file.value = "0";
+    r.run(0.2);
+    const double before = r.g->scan_phase;
+    REQUIRE(before > 0.3);
+    r.g->inputs.sound_file.value = "2";
+    r.tick();
+    if(across)
+      CHECK(r.g->scan_phase > before);
+    else
+      CHECK(r.g->scan_phase < 0.05);
+  }
+}

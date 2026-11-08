@@ -292,10 +292,14 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
       break;
   }
 
-  // Nothing plays: one empty message clears the playheads, then nothing
-  if(ph.count == 0 && !ui_heads_shown)
+  // Whenever Scan moves Position, even with no grain of the shown sound, as
+  // when the grains play the folder's other files: else the play zone
+  // stands still, then jumps. Else while grains of it play, and once more
+  // to clear them.
+  const bool moving = ph.scanning && (inputs.playing || midi_active);
+  if(ph.count == 0 && !moving && !ui_heads_shown)
     return;
-  ui_heads_shown = ph.count > 0;
+  ui_heads_shown = ph.count > 0 || moving;
   send_message(std::move(msg));
 }
 
