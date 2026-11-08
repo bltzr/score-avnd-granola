@@ -652,3 +652,112 @@ TEST_CASE("Max Voices set before prepare(), as score does: a sound dropped plays
     CHECK(g->grains_made > 0);
   }
 }
+
+TEST_CASE("Density Deviation never stops the grains, whatever it draws", "[timing]")
+{
+  using G = Granola::Granola;
+  const float inf = std::numeric_limits<float>::infinity();
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  // Any draw: a finite factor within max_density_octaves of 1, as many
+  // intervals shorter as longer
+  for(float d : {0.f, 0.25f, 1.f})
+    for(float z : {-inf, -1e30f, -100.f, -3.f, -1.f, 0.f, 1.f, 3.f, 100.f, 1e30f, inf, nan})
+    {
+      CAPTURE(d, z);
+      const double f = G::density_factor_of(z, d);
+      CHECK(std::isfinite(f));
+      CHECK(f >= 1. / G::max_density_factor);
+      CHECK(f <= G::max_density_factor);
+      if(std::isfinite(z) && std::abs(z * d) < 8.f)
+        CHECK(f == Catch::Approx(std::exp2(z * d / 2.)));
+    }
+  CHECK(G::density_factor_of(0.f, 1.f) == 1.);
+  CHECK(G::density_factor_of(2.f, 1.f) == Catch::Approx(2.));
+  CHECK(G::density_factor_of(-2.f, 1.f) == Catch::Approx(0.5));
+  CHECK(G::density_factor_of(nan, 1.f) == 1.);
+
+  // Each grain's draw the lowest there is, or one that no draw gives: the
+  // next grains come, at Density / max_density_factor at the slowest.
+  // Grains of 0.05 s at Density 20: 400 a second, 25 at the slowest.
+  for(double forced : {G::density_factor_of(-inf, 1.f), 0., -1., 1e-300, double(nan)})
+  {
+    CAPTURE(forced);
+    Rig r;
+    r.g->inputs.dens_j.value = 1.f;
+    r.run(0.05);
+    int made = 0;
+    for(int t = 0; t < Rig::rate / Rig::F; t++)
+    {
+      r.g->density_factor = forced;
+      const auto before = r.g->grains_made;
+      r.tick();
+      made += int(r.g->grains_made - before);
+    }
+    CHECK(made >= 20);
+    CHECK(std::isfinite(r.g->trigger_counter));
+  }
+}
+
+TEST_CASE("Density 0: the grain clock goes on, slower, and back at once", "[timing]")
+{
+  for(float density : {0.f, -0.f, 1e-30f})
+  {
+    CAPTURE(density);
+    Rig r;
+    r.g->inputs.density.value = density;
+    r.run(0.5);
+    CHECK(std::isfinite(r.g->trigger_counter));
+    // As Density comes back, so do the grains: the interval was finite
+    r.g->inputs.density.value = 20.f;
+    const auto before = r.g->grains_made;
+    r.run(0.05);
+    CHECK(r.g->grains_made - before >= 15);
+  }
+  // At the slowest, still a grain every interval / min_density: of 24
+  // samples there, a grain about every half second
+  Rig r;
+  r.g->inputs.dur.value = 24.f / Rig::rate;
+  r.g->inputs.density.value = 0.f;
+  r.run(0.1);
+  const auto before = r.g->grains_made;
+  r.run(1.);
+  CHECK(r.g->grains_made - before >= 1);
+}
+
+TEST_CASE("Density is sample-accurate: its values change the pace where they come", "[timing]")
+{
+  // Grains of 24 samples: at Density 1, one every 24 samples; at 8, one every
+  // 3. Density goes from 1 to 8 at a sample of a tick.
+  for(int at : {0, 128, 256, 511})
+  {
+    CAPTURE(at);
+    Rig r;
+    r.g->inputs.dur.value = 24.f / Rig::rate;
+    r.g->inputs.density.value = 1.f;
+    r.run(0.1);
+    // As score gives it: the values of the tick, and the last as the value
+    r.g->inputs.density.values[at] = 8.f;
+    r.g->inputs.density.value = 8.f;
+    const auto before = r.g->grains_made;
+    r.tick();
+    r.g->inputs.density.values.clear();
+    const double made = double(r.g->grains_made - before);
+    const double expected = at / 24. + (Rig::F - at) / 3.;
+    CHECK(made == Catch::Approx(expected).margin(2.));
+    // Then the pace the last value says
+    const auto next = r.g->grains_made;
+    r.tick();
+    CHECK(double(r.g->grains_made - next) == Catch::Approx(Rig::F / 3.).margin(2.));
+  }
+  // Values out of range or not finite, as cables give them: in range
+  Rig r;
+  for(float v : {std::numeric_limits<float>::quiet_NaN(), -5.f, 1e9f})
+  {
+    r.g->inputs.density.values[100] = v;
+    r.tick();
+    r.g->inputs.density.values.clear();
+    CHECK(std::isfinite(r.g->density_now));
+    CHECK(r.g->density_now >= 0.);
+    CHECK(r.g->density_now <= 256.);
+  }
+}

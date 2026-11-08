@@ -176,9 +176,14 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
           break;
         }
       }
+      // Density's values within the block, as automation gives them
+      if(rng() % 5 == 0)
+        for(int k = int(rng() % 4); k > 0; k--)
+          in.density.values[int(rng() % 1100)] = any_value(rng) * float(1 + rng() % 300);
       // A block of any length, up to the host's largest
       h.tick(int(rng() % 3 == 0 ? rng() % 4 : rng() % 8 == 0 ? rng() % Host::max_frames : rng() % 1024));
       in.midi.midi_messages.clear();
+      in.density.values.clear();
       in.trig.value.reset();
     }
   }

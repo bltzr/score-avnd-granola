@@ -373,6 +373,30 @@ float Granola::deviate(float deviation) noexcept
   return deviation > 0.f ? n01(rd) * 0.25f * deviation : 0.f;
 }
 
+double Granola::density_factor_of(float z, float d) noexcept
+{
+  // In octaves, so that as many intervals are shorter as longer, and none is
+  // ever 0 or infinite: the next grain always comes
+  const double octaves = double(z) * double(d) * 0.5;
+  if(ossia::safe_isnan(octaves))
+    return 1.;
+  return std::exp2(std::clamp(octaves, -max_density_octaves, max_density_octaves));
+}
+
+double Granola::density_at(int s) noexcept
+{
+  // The values that came by this sample, as the control's own are: in range
+  const auto& values = inputs.density.values;
+  for(; density_next < values.size(); density_next++)
+  {
+    const auto& [at, v] = *values.nth(density_next);
+    if(at > s)
+      break;
+    density_now = ossia::safe_isfinite(v) ? std::clamp(double(v), 0., 256.) : 1.;
+  }
+  return std::max(density_now, min_density);
+}
+
 float Granola::grain_rate(float base) noexcept
 {
   // Pitch Deviation in whole semitones (6 a deviation at 1: notes of a scale
@@ -589,9 +613,8 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
   if(!g.m_active)
     return false;
   grains_made++;
-  // Density Deviation: relative, never below 0, which would make a grain at
-  // every sample; drawn for each grain, applied to the current Density
-  density_factor = std::max(1. + deviate(inputs.dens_j), 0.);
+  // Density Deviation: drawn for each grain, applied to the current Density
+  density_factor = inputs.dens_j > 0.f ? density_factor_of(n01(rd), inputs.dens_j) : 1.;
   spread_grain(g, p.out_channels);
   return true;
 }
@@ -615,7 +638,7 @@ void Granola::advance_scan(const tick_plan& p) noexcept
   }
 }
 
-void Granola::advance_timing(const tick_plan& p) noexcept
+void Granola::advance_timing(const tick_plan& p, int s) noexcept
 {
   // When an interval has passed, keeping the fraction of a sample past it
   const auto passed = [](double& counter, double every) {
@@ -625,7 +648,12 @@ void Granola::advance_timing(const tick_plan& p) noexcept
     counter += 1.;
     return done;
   };
-  const double density = inputs.density * density_factor;
+  // Within the bounds density_factor_of() gives it whatever set it: never 0
+  constexpr double most = max_density_factor;
+  const double factor = ossia::safe_isnan(density_factor)
+                            ? 1.
+                            : std::clamp(density_factor, 1. / most, most);
+  const double density = std::max(density_at(s) * factor, min_density);
   if(midi_active)
   {
     for(int note = 0; note < 128; note++)
@@ -666,6 +694,11 @@ void Granola::operator()(tick t)
   if(inputs.trig)
     trigger = true;
   auto plan = make_plan(cur, cur_index, from_folder);
+  // Density from where it was, then as its values in this tick say; the
+  // control's own when none came
+  density_next = 0;
+  if(density_now < 0. || inputs.density.values.empty())
+    density_now = inputs.density;
 
   // In blocks the buffers made in prepare() hold
   for(int b0 = 0; b0 < t.frames; b0 += max_block)
@@ -710,7 +743,7 @@ void Granola::operator()(tick t)
           break;
         }
 
-      advance_timing(plan);
+      advance_timing(plan, b0 + s);
     }
 
     // The part every output shares, and the gain, once for every sample
