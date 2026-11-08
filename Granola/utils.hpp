@@ -46,6 +46,10 @@ static inline double wrapDouble(double p_current, double tablesize)
 // should be much more precise with large b
 inline double fastPrecisePow(double a, const double b)
 {
+  // Only non-negative exponents an int holds: a negative or NaN one would
+  // never end the loop below
+  if(!(b >= 0. && b < 1e9))
+    return std::pow(a, b);
   // calculate approximation with just the fraction of the exponent
   int32_t exp = (int32_t)b;
   union

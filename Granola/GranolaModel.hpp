@@ -354,6 +354,8 @@ public:
   void prepare(setup info);
 
   void resize(int n);
+  //! The controls in their ranges, finite
+  void sanitize_inputs() noexcept;
   //! The outputs for a sound of \p sound_channels: Output Channels, else as
   //! many as Channels reads of it; two at least with Spread
   int output_channels(int sound_channels) const noexcept;
