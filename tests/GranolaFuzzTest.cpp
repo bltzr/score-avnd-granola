@@ -2,6 +2,8 @@
 // to anything and their update() called, prepare() again with other sizes,
 // blocks of any length, sounds replaced by others or removed, MIDI. Nothing
 // may crash, and the outputs stay finite. Run it under ASan and UBSan.
+#include <ossia/math/safe_math.hpp>
+
 #include <Granola/Granola.hpp>
 
 #include <catch2/catch_all.hpp>
@@ -57,7 +59,7 @@ struct Host
     bool finite = true;
     for(int c = 0; c < (int)g->outputs.audio.channels; c++)
       for(int s = 0; s < frames; s++)
-        finite &= std::isfinite(out[c][s]);
+        finite &= ossia::safe_isfinite(out[c][s]);
     REQUIRE(finite);
   }
 };

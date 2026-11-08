@@ -9,6 +9,7 @@
 #include <catch2/catch_all.hpp>
 
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <numbers>
 #include <string_view>
@@ -150,6 +151,34 @@ TEST_CASE("Granola (v1): a Jitter spreads its control by N(0, range / 4)", "[v1]
     CHECK(mean == Catch::Approx(0.5).margin(0.03));
     CHECK(sd == Catch::Approx(range / 4.).margin(0.015));
   }
+}
+
+TEST_CASE("Granola (v1): NaN or infinite controls, as cables give them: no crash", "[v1]")
+{
+  const float bad[]{
+      std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(),
+      -std::numeric_limits<float>::infinity()};
+  for(int which = 0; which < 8; which++)
+    for(float b : bad)
+    {
+      CAPTURE(which, b);
+      RigV1 r;
+      auto& in = r.g->inputs;
+      in.pos_j.value = 1.f;
+      in.dur_j.value = 1.f;
+      in.rate_j.value = 1.f;
+      float* f[]{&in.pos.value,     &in.dur.value,     &in.rate.value,
+                 &in.density.value, &in.pos_j_r.value, &in.dur_j_r.value,
+                 &in.rate_j_r.value, &in.dur_j.value};
+      *f[which] = b;
+      r.start();
+      for(int t = 0; t < 40; t++)
+        r.tick();
+      // The grains it made read the sound, whatever their level
+      for(auto& g : r.g->grains)
+        if(g.m_active)
+          CHECK(g.m_max_count < 10 * RigV1::rate);
+    }
 }
 
 #if defined(__GLIBCXX__)
