@@ -9,6 +9,7 @@
 #include <halp/mappers.hpp>
 #include <halp/meta.hpp>
 #include <halp/midi.hpp>
+#include <halp/sample_accurate_controls.hpp>
 #include <halp/sound_set.hpp>
 #include <halp/soundfile_port.hpp>
 #include <libremidi/message.hpp>
@@ -54,6 +55,14 @@ public:
   // max_channels is how many of a sound's channels a grain reads.
   static constexpr int max_outputs = 1024;
 
+  // The fewest grains per grain length: Density 0 or about, which the knob
+  // goes down to, still makes a grain now and then, and an interval between
+  // grains is never infinite
+  static constexpr double min_density = 1. / 1024.;
+  // What Density Deviation multiplies Density by: within this many octaves
+  static constexpr double max_density_octaves = 4.;
+  static constexpr double max_density_factor = 16.; // 2^max_density_octaves
+
   struct ins
   {
     struct : halp::soundfile_port<"Sound">
@@ -68,8 +77,8 @@ public:
     halp::hslider_f32<"Position", halp::range{0.00000001, 1., 0.00000001}> pos;
     // Each Deviation spreads its control per grain, as a normal distribution
     // of deviation d / 4: at 1, 95% of the grains within ±0.5 of it, of the
-    // region for Position and Duration, relative for Density. Gain's is its
-    // own, below.
+    // region for Position and Duration. Density's and Gain's are their own,
+    // below.
     halp::hslider_f32<"Position Deviation", halp::range{0., 1., 0.}> pos_j;
     // Position moves through the sound by itself, at this speed: 1 goes
     // through it in its own duration, -1 backwards, 0 stays at Position
@@ -89,10 +98,15 @@ public:
     // the grains within an octave; else as a ratio added to Pitch
     halp::toggle<"Pitch Deviation in Semitones"> rate_j_semitones;
     halp::toggle<"Reverse"> reverse;
-    struct : halp::knob_f32<"Density", halp::range{0., 256., 1.}>
+    // Grains per grain length. Sample-accurate: automation and cables change
+    // the pace at the sample their values come at, not a block later. Under
+    // min_density it plays at min_density: the grain clock never stops.
+    struct : halp::accurate<halp::knob_f32<"Density", halp::range{0., 256., 1.}>>
     {
       using mapper = halp::log_mapper<std::ratio<99, 100>>;
     } density;
+    // Multiplies Density per grain by 2^N(0, d / 2): at 1, 95% of the
+    // intervals between half and twice as long, as many shorter as longer
     halp::vslider_f32<"Density Deviation", halp::range{0., 1., 0.}> dens_j;
     // How likely a grain plays backwards; Reverse flips them all
     halp::knob_f32<"Reverse Chance", halp::range{0., 1., 0.}> reverse_chance;
@@ -290,6 +304,14 @@ public:
   double trigger_counter{0};
   // The Density Deviation of the next grain, drawn when a grain is made
   double density_factor{1.};
+  //! What Density Deviation multiplies Density by, for a normal draw \p z of
+  //! N(0, 1) at deviation \p d: 2^(z d / 2), within max_density_octaves of
+  //! 1 whatever z is; 1 for NaN
+  static double density_factor_of(float z, float d) noexcept;
+  // Density as heard at the sample being made: its sample-accurate values
+  // as they come in the tick
+  double density_now{-1.};
+  std::size_t density_next{};
   // Gain as heard: it follows the control in a few milliseconds
   double gain_now{-1.};
   // In random folder mode, the length of the file the last grain read: the
@@ -361,6 +383,8 @@ private:
 
   //! A Deviation's value for a grain: N(0, d / 4)
   float deviate(float deviation) noexcept;
+  //! Density at sample \p s of the tick, at least min_density
+  double density_at(int s) noexcept;
   //! A grain's speed at \p base, with Pitch Deviation and Reverse
   float grain_rate(float base) noexcept;
   //! The shortest grain, as a part of a sound of \p frames, at \p rate
@@ -374,7 +398,7 @@ private:
   //! at \p b0: the sample after its last one in the block
   int play(Grain& g, int s0, int n, int b0, const tick_plan& p) noexcept;
   void advance_scan(const tick_plan& p) noexcept;
-  void advance_timing(const tick_plan& p) noexcept;
+  void advance_timing(const tick_plan& p, int s) noexcept;
 
   // Another sequence for every instance
   static std::random_device& random_source()
