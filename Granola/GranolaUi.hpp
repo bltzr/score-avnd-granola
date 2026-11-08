@@ -703,6 +703,8 @@ struct Granola::ui
       {
         halp_meta(layout, grid)
         halp_meta(columns, 2)
+        // Each column flush left: its items line up under each other
+        halp_meta(alignment, halp::alignments::left)
         halp::item<&ins::pos, small_knob_as("Position")> position;
         halp::item<&ins::pos_j, small_slider_as("Deviation")> pos_jitter;
         halp::item<&ins::dur, small_knob_as("Duration")> duration;
@@ -721,6 +723,8 @@ struct Granola::ui
       {
         halp_meta(layout, grid)
         halp_meta(columns, 2)
+        // Each column flush left: its items line up under each other
+        halp_meta(alignment, halp::alignments::left)
         halp::item<&ins::rate, small_knob_as("Pitch")> pitch;
         halp::item<&ins::rate_j, small_slider_as("Deviation")> jitter;
         // How many grains play backwards
@@ -738,19 +742,17 @@ struct Granola::ui
       {
         halp_meta(layout, grid)
         halp_meta(columns, 2)
+        // Each column flush left: its items line up under each other
+        halp_meta(alignment, halp::alignments::left)
         halp::item<&ins::gain, small_knob_as("Gain")> gain;
         halp::item<&ins::gain_j, small_slider_as("Deviation")> jitter;
         halp::item<&ins::spread, small_knob_as("Spread")> spread;
         // Spread places the grains among them
         halp::item<&ins::out_channels, halp::label_as("Outputs")> outputs;
-      } knobs;
-      // The sound's channels the grains read, from Offset
-      struct
-      {
-        halp_meta(layout, hbox)
+        // The sound's channels the grains read, from Offset
         halp::item<&ins::src_channels, halp::label_as("Channels")> channels;
         halp::item<&ins::channel_offset, halp::label_as("Offset")> offset;
-      } channels;
+      } knobs;
     } output;
 
     // The shape of each grain

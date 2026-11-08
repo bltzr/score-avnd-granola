@@ -10,6 +10,7 @@
 #include <Process/Commands/SetControlValue.hpp>
 #include <Process/ProcessList.hpp>
 #include <Process/Dataflow/Port.hpp>
+#include <Process/Dataflow/PortItem.hpp>
 #include <Process/DocumentPlugin.hpp>
 #include <Process/Focus/FocusDispatcher.hpp>
 #include <Process/LayerPresenter.hpp>
@@ -45,6 +46,7 @@
 #include <QGraphicsView>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QUrl>
@@ -57,6 +59,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <thread>
 
 namespace
@@ -712,3 +715,52 @@ TEST_CASE("A document saved by the Granola released first loads as Granola (v1)"
   });
 }
 
+
+
+TEST_CASE("The panel's Grain, Pitch and Output columns line up", "[app][ui]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    spin(50);
+
+    // Where each control's port sits: at the left of its item
+    std::map<QString, double> x;
+    for(auto* it : m.scene.items())
+      if(auto* port = dynamic_cast<Dataflow::PortItem*>(it))
+        if(m.panel->isAncestorOf(port))
+          x[port->port().name()] = port->scenePos().x();
+    const std::vector<std::vector<QString>> columns{
+        {"Position", "Duration", "Density"},
+        {"Position Deviation", "Duration Deviation", "Density Deviation"},
+        {"Pitch", "Reverse Chance"},
+        {"Pitch Deviation", "Pitch Deviation in Semitones"},
+        {"Gain", "Spread", "Source Channels"},
+        {"Gain Deviation", "Output Channels", "Channel Offset"}};
+    for(const auto& column : columns)
+    {
+      CAPTURE(column.front().toStdString());
+      for(const auto& name : column)
+      {
+        CAPTURE(name.toStdString());
+        REQUIRE(x.contains(name));
+        CHECK(x[name] == Catch::Approx(x[column.front()]).margin(0.5));
+      }
+    }
+
+    // GRANOLA_PANEL_PNG=path: the panel as drawn, to look at
+    if(const auto path = qEnvironmentVariable("GRANOLA_PANEL_PNG"); !path.isEmpty())
+    {
+      const QRectF r = m.panel->sceneBoundingRect();
+      QImage img((r.size() * 2).toSize(), QImage::Format_ARGB32);
+      img.fill(Qt::black);
+      QPainter p(&img);
+      p.setRenderHint(QPainter::Antialiasing);
+      m.scene.render(&p, QRectF{QPointF{}, r.size() * 2}, r);
+      p.end();
+      img.save(path);
+    }
+  });
+}
