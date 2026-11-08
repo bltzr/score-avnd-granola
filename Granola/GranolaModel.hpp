@@ -151,6 +151,12 @@ public:
     halp::folder_combobox<"Sound in folder", "Sounds", sound_extensions_lit> sound_file;
     // Every grain plays a random file of the folder instead
     halp::toggle<"Random"> random;
+    // A file of the folder by its index, for automation and cables: -1 plays
+    // the file picked by name above, 0 and more that file of the folder
+    // (clipped to the last one)
+    struct : halp::spinbox_i32<"Sound index", halp::range{-1, 4096, -1}>
+    {
+    } sound_index;
 
   } inputs;
 
@@ -181,11 +187,12 @@ public:
     uint8_t amp[max_heads];  // window amplitude, 0-255
     uint16_t pos[max_heads]; // position in the current sound, 0-65535
   };
-  // The state of the sound shown: whether it could be decoded yet.
+  // The sound that plays from the folder, and whether it could be decoded
   struct current_sound
   {
     int32_t index; // in the folder; -1 when the Sound port's file plays
     halp::sound_status status;
+    char name[240]; // its path in the folder
   };
   struct processor_to_ui
   {
@@ -204,6 +211,7 @@ public:
   // What the UI was last told: the folder index and its state
   int ui_sent_index{-2};
   halp::sound_status ui_sent_status{};
+  uint64_t ui_sent_generation{};
   int ui_frame_counter{0}; // throttles the playheads
   bool ui_heads_shown{false};
 
@@ -234,11 +242,12 @@ public:
 
   std::size_t last_sound_path{}; // hash: stops the grains of a replaced Sound file
 
-  // The folder file the Sound in folder names, looked up again only when the
-  // folder or the name changes
+  // The folder file the Sound index or the Sound in folder names, looked up
+  // again only when the folder, the index or the name changes
   int folder_index{-1};
   uint64_t folder_index_generation{};
   std::size_t folder_index_name{};
+  int folder_index_index{-2};
   int find_folder_index();
   int random_ready_index();
 

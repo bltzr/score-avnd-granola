@@ -27,14 +27,24 @@ int Granola::find_folder_index()
 {
   const auto& sounds = inputs.sounds;
   const auto name = std::hash<std::string_view>{}(inputs.sound_file.value);
-  if(sounds.generation() != folder_index_generation || name != folder_index_name)
+  const int index = inputs.sound_index.value;
+  if(sounds.generation() != folder_index_generation || name != folder_index_name
+     || index != folder_index_index)
   {
     folder_index_generation = sounds.generation();
     folder_index_name = name;
-    folder_index = sounds.find(inputs.sound_file.value);
-    // No such file, e.g. none picked yet: the first one
-    if(folder_index < 0 && !sounds.empty())
-      folder_index = 0;
+    folder_index_index = index;
+    if(sounds.empty())
+      folder_index = -1;
+    else if(index >= 0)
+      folder_index = std::min(index, int(sounds.size()) - 1);
+    else
+    {
+      folder_index = sounds.find(inputs.sound_file.value);
+      // No such file, e.g. none picked yet: the first one
+      if(folder_index < 0)
+        folder_index = 0;
+    }
   }
   return folder_index;
 }
@@ -160,12 +170,23 @@ void Granola::operator()(tick t)
     const auto status = cur_index >= 0 ? inputs.sounds[cur_index].status
                         : cur          ? halp::sound_status::ready
                                        : halp::sound_status::unloaded;
-    if(ui_refresh || cur_index != ui_sent_index || status != ui_sent_status)
+    if(ui_refresh || cur_index != ui_sent_index || status != ui_sent_status
+       || (cur_index >= 0 && inputs.sounds.generation() != ui_sent_generation))
     {
-      send_message(processor_to_ui{current_sound{cur_index, status}});
+      processor_to_ui msg{current_sound{cur_index, status, {}}};
+      if(cur_index >= 0)
+      {
+        auto& cs = ossia::get<current_sound>(msg.message);
+        const std::string_view name = inputs.sounds[cur_index].name;
+        const auto n = std::min(name.size(), sizeof(cs.name) - 1);
+        std::memcpy(cs.name, name.data(), n);
+        cs.name[n] = 0;
+      }
+      send_message(std::move(msg));
       ui_refresh = false;
       ui_sent_index = cur_index;
       ui_sent_status = status;
+      ui_sent_generation = inputs.sounds.generation();
     }
   }
 

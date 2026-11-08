@@ -268,6 +268,9 @@ struct WaveformItem
   std::string sound_path;
   bool was_folder{};
   std::string last_folder;
+  // The folder file the processor plays, while it runs: it follows the Sound
+  // index, and the first file when the picked one is not in the folder
+  std::string playing_file;
 
   // The file shown: the Sound file, or the file picked in the folder
   void show_file(const std::string& path)
@@ -576,6 +579,7 @@ struct Granola::ui
           std::function<void(control_value_type)> set;
         } sound_file;
         halp::item<&ins::random> random;
+        halp::item<&ins::sound_index> sound_index;
       } folder;
     } pages;
   } source_box;
@@ -715,11 +719,19 @@ struct Granola::ui
     if(from_folder())
     {
       file.clear();
-      if(!page.folder.value.empty() && !page.sound_file.value.empty()
-         && page.sound_file.value != "-")
-        file = page.folder.value + "/" + page.sound_file.value;
+      const std::string& name
+          = !wf.playing_file.empty() ? wf.playing_file : page.sound_file.value;
+      if(!page.folder.value.empty() && !name.empty() && name != "-")
+        file = page.folder.value + "/" + name;
     }
     wf.show_file(file);
+  }
+
+  // Stopped: the picked file again, rather than the last one played
+  void stop()
+  {
+    wave_box.waveform.playing_file.clear();
+    show_current_sound();
   }
 
   struct bus
@@ -784,6 +796,8 @@ struct Granola::ui
     {
       auto& wf = self.wave_box.waveform;
       wf.status = cs.status;
+      wf.playing_file = cs.index >= 0 ? std::string{cs.name} : std::string{};
+      self.show_current_sound();
       if(wf.update)
         wf.update();
     }
