@@ -286,8 +286,9 @@ void Granola::operator()(tick t)
   // Reverse flips the whole rate, not only its jitter, and Reverse Chance
   // flips some grains.
   const auto jittered_rate = [&](float base) {
+    // Whole semitones: notes of a scale rather than a detuned smear
     const float rate = inputs.rate_j_semitones
-                           ? base * std::exp2(spread(inputs.rate_j) * 24.f / 12.f)
+                           ? base * std::exp2(std::round(spread(inputs.rate_j) * 24.f) / 12.f)
                            : base + spread(inputs.rate_j);
     bool backwards = inputs.reverse;
     if(inputs.reverse_chance > 0.f
@@ -297,8 +298,11 @@ void Granola::operator()(tick t)
   };
 
   // Scan: Position moves by itself, through the sound at Scan times its
-  // speed. From Position again when the sound changes or it starts playing.
-  if(cur.data != scan_source || (inputs.playing && !scan_was_playing))
+  // speed. From Position again when it stops, when it starts playing, and
+  // when the sound changes, unless it goes on across the folder's sounds.
+  const bool new_sound
+      = cur.data != scan_source && !(from_folder && inputs.scan_across);
+  if(new_sound || (inputs.playing && !scan_was_playing) || inputs.scan == 0.f)
     scan_phase = 0.;
   scan_source = cur.data;
   scan_was_playing = inputs.playing;
@@ -366,10 +370,14 @@ void Granola::operator()(tick t)
           float dur = inputs.dur + spread(inputs.dur_j);
           float rate;
           boost::container::static_vector<double, NCHAN> spawn_ampvec = ampvec;
-          // Gain jitter: relative, per grain, never below silence
+          // Gain jitter: some grains quieter, in decibels, down to -24 dB a
+          // deviation at 1. Never louder, which would clip: and the level
+          // of many grains around Gain would average out.
           if(inputs.gain_j > 0.f)
           {
-            const double g = std::max(1. + spread(inputs.gain_j), 0.);
+            const double g = std::pow(
+                10., -std::abs(std::normal_distribution<double>(0., 1.)(rd))
+                         * inputs.gain_j * 24. / 20.);
             for(auto& a : spawn_ampvec)
               a *= g;
           }

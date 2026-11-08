@@ -109,8 +109,8 @@ public:
       using mapper = halp::inverse_mapper<halp::pow_mapper<4>>;
     } rate;
     halp::vslider_f32<"Pitch Jitter", halp::range{0., 1., 0.}> rate_j;
-    // Pitch Jitter in semitones, the same at every pitch: at 1, 95% of the
-    // grains within an octave; else as a ratio added to Pitch
+    // Pitch Jitter in whole semitones, the same at every pitch: at 1, 95% of
+    // the grains within an octave; else as a ratio added to Pitch
     struct : halp::toggle<"Pitch Jitter in Semitones">
     {
       static float upgrade_value(float) { return 0.f; }
@@ -130,7 +130,20 @@ public:
     halp::vslider_f32<"Gain Jitter", halp::range{0., 1., 0.}> gain_j;
     // Unused: free for a control to come, of another kind than a knob
     halp::knob_f32<"Gain Jitter Range", halp::range{0., 1., 1.}> gain_j_r;
-    halp::xy_pad_f32<"Window coefs", halp::range{0.f, 1.f, 0.f}> win_coefs;
+    // A bell by default rather than a flat window: Beta(3.3, 3.3), close to
+    // a Hann window (y is scaled by wc_radius)
+    struct : halp::xy_pad_f32<"Window coefs", halp::range{0.f, 1.f, 0.f}>
+    {
+      static constexpr auto range()
+      {
+        struct
+        {
+          float min{0.f}, max{1.f};
+          halp::xy_type<float> init{0.5f, 0.05f};
+        } r;
+        return r;
+      }
+    } win_coefs;
     struct
     {
       halp__enum_combobox("Interpolation mode", Cubic, None, Linear, Cubic)
@@ -183,6 +196,9 @@ public:
     halp::folder_combobox<"Sound in folder", "Sounds", sound_extensions_lit> sound_file;
     // Every grain plays a random file of the folder instead
     halp::toggle<"Random"> random;
+    // Scan goes on where it was when another file of the folder plays,
+    // rather than from Position again
+    halp::toggle<"Scan Across Sounds"> scan_across;
 
   } inputs;
 

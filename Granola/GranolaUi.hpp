@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cfloat>
 #include <cstdio>
+#include <memory>
 #include <optional>
 
 namespace Granola
@@ -106,21 +107,6 @@ struct WindowShapeItem
     ctx.set_fill_color(halp::colors::background_darker);
     ctx.draw_rounded_rect(0., 0., w, h, 3.);
     ctx.fill();
-
-    // A faint grid at the quarters, so that even a flat window reads as one
-    auto grid = ctx.to_rgba(halp::colors::mid);
-    grid.a = 50;
-    ctx.begin_path();
-    for(double q : {0.25, 0.5, 0.75})
-    {
-      ctx.move_to(pad + q * (w - 2. * pad), pad);
-      ctx.line_to(pad + q * (w - 2. * pad), h - pad);
-      ctx.move_to(pad, pad + q * (h - 2. * pad));
-      ctx.line_to(w - pad, pad + q * (h - 2. * pad));
-    }
-    ctx.set_stroke_color(grid);
-    ctx.set_stroke_width(1.);
-    ctx.stroke();
 
     ctx.begin_path();
     ctx.move_to(pad, h - pad);
@@ -321,6 +307,10 @@ struct WaveformItem
   // only holds widgets)
   std::string sound_path;
   FolderFiles folder_files;
+  // The source as last seen, once seen: a switch to the folder is a change
+  // from it, not the panel being built
+  bool seen{};
+  bool was_folder{};
   // The folder file the processor plays, while it runs: it follows an index
   // sent to Sound in folder, and the first file when the picked one is not in
   // the folder
@@ -374,9 +364,8 @@ struct WaveformItem
   double win_x1() const
   {
     const double p = shown_pos();
-    const double wdur = (dur() <= 0.f || dur() >= 1.f)
-                            ? 1.
-                            : std::min(p + double(dur()), 1.) - p;
+    // The shortest grains are a line: Duration at its minimum is ~0
+    const double wdur = dur() >= 1.f ? 1. : std::clamp(std::min(p + double(dur()), 1.) - p, 0., 1.);
     return std::min(win_x0() + wdur * draw_w(), width() - pad);
   }
 
@@ -635,9 +624,9 @@ struct Granola::ui
           {
             halp_meta(name, "File")
             halp_meta(layout, hbox)
-            // score's own widget for a sound file is a waveform: the one
-            // below is it, with the grains over it
-            path_control<&ins::sound, halp::look{.widget = halp::control_widget::none}>
+            // Small, score's widget for a sound file is its name, as for the
+            // folder: the waveform is below, with the grains over it
+            path_control<&ins::sound, halp::look{.size = halp::control_size::compact}>
                 file;
           } file;
           struct
@@ -645,7 +634,7 @@ struct Granola::ui
             halp_meta(name, "Folder")
             halp_meta(layout, hbox)
             path_control<&ins::sounds> folder;
-            struct : halp::control<&ins::sound_file, bare_dropdown>
+            struct : settable<&ins::sound_file, bare_dropdown>
             {
               // Room for file names, whatever the folder's files are
               static constexpr double width() { return 150.; }
@@ -684,6 +673,8 @@ struct Granola::ui
         halp::item<&ins::dens_j, small_knob_as("Jitter")> dens_jitter;
         halp::item<&ins::scan, small_knob_as("Scan")> scan;
       } knobs;
+      // Folder source: Scan goes on when another of its files plays
+      halp::item<&ins::scan_across, halp::label_as("Scan across sounds")> scan_across;
     } grain;
 
     struct
@@ -776,10 +767,24 @@ struct Granola::ui
     wf.folder_mode = from_folder();
     if(wf.update)
       wf.update();
-    // Only the panel changes here: this also runs on undo and redo, where an
-    // edit would cut the redo history.
+    // Only the panel changes here, but for one case: this also runs on undo
+    // and redo, where an edit would cut the redo history.
     wf.folder_files.set_folder(page.folder.value);
     wf.folder_files.value = page.sound_file.value;
+
+    // Switching to the folder while it is empty: the Sound file's folder,
+    // with that file picked. score applies these after the switch, and not
+    // when the switch is undone or redone.
+    const bool folder = from_folder();
+    if(wf.seen && folder && !wf.was_folder && page.folder.value.empty()
+       && !wf.sound_path.empty() && page.folder.set && page.sound_file.set)
+    {
+      const QFileInfo fi(QString::fromStdString(wf.sound_path));
+      page.folder.set(fi.absolutePath().toStdString());
+      page.sound_file.set(fi.fileName().toStdString());
+    }
+    wf.seen = true;
+    wf.was_folder = folder;
 
     show_current_sound();
   }
