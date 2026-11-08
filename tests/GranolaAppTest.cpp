@@ -750,17 +750,41 @@ TEST_CASE("The panel's Grain, Pitch and Output columns line up", "[app][ui]")
       }
     }
 
-    // GRANOLA_PANEL_PNG=path: the panel as drawn, to look at
+    // Play first, then Grain, Pitch, Output, Window
+    CHECK(x["Continuous"] < x["Position"]);
+    CHECK(x["Position Deviation"] < x["Pitch"]);
+    CHECK(x["Pitch Deviation"] < x["Gain"]);
+    CHECK(x["Gain Deviation"] < x["Window mode"]);
+
+    // GRANOLA_PANEL_PNG=path.png: the panel as drawn, to look at, with a
+    // Sound file (path-file.png) and with a folder (path-folder.png)
     if(const auto path = qEnvironmentVariable("GRANOLA_PANEL_PNG"); !path.isEmpty())
     {
-      const QRectF r = m.panel->sceneBoundingRect();
-      QImage img((r.size() * 2).toSize(), QImage::Format_ARGB32);
-      img.fill(Qt::black);
-      QPainter p(&img);
-      p.setRenderHint(QPainter::Antialiasing);
-      m.scene.render(&p, QRectF{QPointF{}, r.size() * 2}, r);
-      p.end();
-      img.save(path);
+      const auto save = [&](const QString& suffix) {
+        spin(100);
+        const QRectF r = m.panel->sceneBoundingRect();
+        QImage img((r.size() * 2).toSize(), QImage::Format_ARGB32);
+        img.fill(Qt::black);
+        QPainter p(&img);
+        p.setRenderHint(QPainter::Antialiasing);
+        m.scene.render(&p, QRectF{QPointF{}, r.size() * 2}, r);
+        p.end();
+        QString file = path;
+        img.save(file.replace(".png", suffix + ".png"));
+      };
+      save("");
+      QTemporaryDir dir;
+      for(auto name : {"Back2.wav", "Kick.wav", "Snare long name.wav"})
+        write_wav(dir.filePath(name), 220, 9600, 1);
+      m.set("Sound", dir.filePath("Kick.wav").toStdString());
+      m.play(20);
+      save("-file");
+      m.set("Sounds", dir.path().toStdString());
+      m.set("Source", std::string("Folder"));
+      m.set("Sound in folder", std::string("Back2.wav"));
+      m.play_until([&] { return m.object().inputs.sounds.size() == 3; });
+      m.play(20);
+      save("-folder");
     }
   });
 }
@@ -771,7 +795,9 @@ namespace
 QGraphicsItem* source_selector(Mounted& m)
 {
   for(auto* it : m.scene.items())
-    if(m.panel->isAncestorOf(it) && it->boundingRect() == QRectF{0., 0., 64., 22.})
+    if(m.panel->isAncestorOf(it)
+       && it->boundingRect()
+              == QRectF{0., 0., Granola::SourceItem::width(), Granola::SourceItem::height()})
       return it;
   return nullptr;
 }
@@ -810,11 +836,13 @@ TEST_CASE("Picking Folder in the panel takes the Sound file's folder, as one und
     m.set("Sound", dir.filePath("b.wav").toStdString());
     auto* selector = source_selector(m);
     REQUIRE(selector);
+    // Its box, under its label
+    constexpr double box = Granola::SourceItem::label_h;
 
     // A click on the selector: Folder, the Sound file's folder and the file
     const auto picked = text_of(m, "Sound in folder");
     const int before = stack.currentIndex();
-    click(m, selector, {20., 11.});
+    click(m, selector, {20., box + 11.});
     CHECK(source_is(m, "Folder"));
     CHECK(
         QFileInfo{QString::fromStdString(text_of(m, "Sounds"))}.canonicalFilePath()
@@ -834,19 +862,19 @@ TEST_CASE("Picking Folder in the panel takes the Sound file's folder, as one und
     // A Folder set already stays
     m.set("Sounds", other.path().toStdString());
     m.set("Sound in folder", std::string("x.wav"));
-    click(m, selector, {20., 11.});
+    click(m, selector, {20., box + 11.});
     CHECK(source_is(m, "Folder"));
     CHECK(text_of(m, "Sounds") == other.path().toStdString());
     CHECK(text_of(m, "Sound in folder") == "x.wav");
 
     // The strip: - back to File, + Folder; a click on the source shown does
     // nothing
-    click(m, selector, {58., 17.});
+    click(m, selector, {58., box + 17.});
     CHECK(source_is(m, "File"));
     const int at_file = stack.currentIndex();
-    click(m, selector, {58., 17.});
+    click(m, selector, {58., box + 17.});
     CHECK(stack.currentIndex() == at_file);
-    click(m, selector, {58., 5.});
+    click(m, selector, {58., box + 5.});
     CHECK(source_is(m, "Folder"));
   });
 }
