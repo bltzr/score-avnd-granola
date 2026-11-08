@@ -139,12 +139,49 @@ public:
     } playing;
     halp::impulse_button<"Trigger"> trig;
     halp::midi_bus<"MIDI In", libremidi::message> midi;
-    // The notes of MIDI In play grains at their pitch, each at its own pace
-    // as its pitch sets the length of its grains
-    struct : halp::toggle<"Note pitch", halp::toggle_setup{.init = true}>
+    // What the notes of MIDI In do. Nothing: no grain, no pitch. Trigger: a
+    // held note plays grains at Pitch, at its own pace. Trigger and set
+    // pitch: at its pitch, at the pace its pitch makes. Set pitch: no grain
+    // of its own; the grains of Continuous and Trigger at the pitch of the
+    // note pressed last of those held, and once all are released at the
+    // pitch of the last one, until a file is picked by hand or Sound Order
+    // changes; at Pitch before any note. A note's pitch is relative to note
+    // 60. Sound Order's By MIDI note picks files from the notes in every one.
+    struct
     {
-      halp_meta(description, "MIDI notes play grains at their pitch, each at its own pace")
-    } note_pitch;
+      halp_meta(
+          description,
+          "What MIDI notes do: play grains while held, at Pitch or at their pitch, or "
+          "transpose the grains of Continuous and Trigger")
+      static clang_buggy_consteval auto name() { return "On MIDI"; }
+      enum enum_type
+      {
+        Nothing,
+        Trigger,
+        TriggerPitch,
+        SetPitch
+      } value = TriggerPitch;
+      enum widget
+      {
+        combobox
+      };
+      struct range
+      {
+        std::pair<std::string_view, enum_type> values[4]{
+            {"Nothing", Nothing},
+            {"Trigger", Trigger},
+            {"Trigger and set pitch", TriggerPitch},
+            {"Set pitch", SetPitch}};
+        enum_type init = TriggerPitch;
+      };
+      operator enum_type&() noexcept { return value; }
+      operator const enum_type&() const noexcept { return value; }
+      auto& operator=(enum_type t) noexcept
+      {
+        value = t;
+        return *this;
+      }
+    } on_midi;
 
     // Where the sound comes from. Folder with no folder set reads the Sound
     // file, as the file picked in its own folder: switching to Folder plays on
@@ -169,11 +206,13 @@ public:
     // lists it, in natural order), around again after the last. Ping-pong:
     // to the last and back, the ends once. Random walk: a neighbour, mostly
     // the next or previous one, sometimes the one after, back from the ends.
-    // By MIDI note: a held note of MIDI In picks it, (note - 60) modulo the
-    // number of files, with Note pitch or not: with it, each note's grains
-    // read its file; without, the grains of Continuous and Trigger read the
-    // file of the note pressed last of the held ones. With no note held, the
-    // picked file. The other sequences are the folder's, one for every
+    // By MIDI note: a note of MIDI In picks it, (note - 60) modulo the
+    // number of files, whatever On MIDI says: the grains a note plays read
+    // its file; the grains of Continuous and Trigger read the file of the
+    // note pressed last of the held ones, and once all are released the file
+    // of the last one, until a file is picked by hand in Sound in folder or
+    // Sound Order changes (starting and stopping keep it). Before any note,
+    // the picked file. The other sequences are the folder's, one for every
     // grain, MIDI notes too: a chord goes through the files rather than
     // every note of it playing the same one. Files not decoded yet, or which
     // cannot be, are skipped.
@@ -424,6 +463,13 @@ public:
   int file_of_note(int note) const noexcept;
   //! Of the held notes, the one pressed last; -1 for none
   int latest_note() const noexcept;
+  //! The note of the grains of Continuous and Trigger: the held one pressed
+  //! last, else the one in effect when the last one was released, until a
+  //! file is picked by hand or Sound Order changes; -1 for none
+  int clock_note() const noexcept { return midi_held ? latest_note() : latched_note; }
+  int latched_note{-1};
+  std::size_t latch_picked{};
+  int latch_order{-1};
 
   // Scan in folder, Per file: the place of each file, by its name, kept as
   // the folder is listed again (files added or removed move the others a
@@ -527,6 +573,11 @@ private:
   double min_duration(double rate, double frames) const noexcept;
   //! The pitch of a MIDI note, middle C at 1
   static float note_ratio(int note) noexcept { return std::exp2((note - 60) / 12.f); }
+  //! Whether notes play grains of their own, as On MIDI says
+  bool notes_trigger() const noexcept;
+  //! The speed of a grain at Pitch, for a grain of \p note (-1 for the
+  //! grains of Continuous and Trigger), as On MIDI says
+  float pitch_for(int note) const noexcept;
 
   //! Starts a grain: false if there is nothing to read
   bool spawn(Grain& g, tick_plan& p) noexcept;
