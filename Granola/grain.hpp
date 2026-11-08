@@ -53,8 +53,15 @@ struct GranuGrain
 
   boost::container::static_vector<double, 2> m_shape;
   boost::container::static_vector<double, NCHAN> m_chan_amp;
-  // The level of each output channel, for Stereo Spread
-  std::array<float, NCHAN> m_pan{1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
+  // Spread: the grain's level in every output, and on top of it in two
+  // neighbouring ones, `a` and `a + 1` (none when a < 0). As small for a
+  // hundred loudspeakers as for two.
+  struct Pan
+  {
+    float all{1.f};
+    int a{-1};
+    float at_a{}, at_b{};
+  } m_pan;
 
   boost::dynamic_bitset<> m_window_update;
   boost::container::vector<double> m_window;

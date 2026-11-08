@@ -62,7 +62,9 @@ public:
   // enough for pulsar-like timbres, whatever the length of the file.
   static constexpr double min_grain_seconds = 0.0005;
 
-  //static const int NCHAN{8};
+  // Output Channels: as many as a spatial audio system has loudspeakers.
+  // NCHAN is how many of a sound's channels a grain reads.
+  static constexpr int max_outputs = 1024;
 
   struct ins
   {
@@ -228,7 +230,7 @@ public:
     halp::hslider_f32<"Sample End", halp::range{0., 1., 1.}> sample_end;
     // How many outputs, 0 as many as the channels read: Spread places the
     // grains among them
-    halp::spinbox_i32<"Output Channels", halp::range{0, NCHAN, 0}> out_channels;
+    halp::spinbox_i32<"Output Channels", halp::range{0, max_outputs, 0}> out_channels;
 
   } inputs;
 

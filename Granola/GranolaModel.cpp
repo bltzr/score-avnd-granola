@@ -198,8 +198,9 @@ void Granola::operator()(tick t)
   const int n_channels = inputs.src_channels <= 0
                              ? std::min((int)cur.channels, NCHAN)
                              : CLAMP(inputs.src_channels, 1, (int)cur.channels);
-  const int n_out = inputs.out_channels <= 0 ? n_channels
-                                             : std::min((int)inputs.out_channels, NCHAN);
+  const int n_out = inputs.out_channels <= 0
+                        ? n_channels
+                        : std::min((int)inputs.out_channels, max_outputs);
   const int ch_offset
       = CLAMP(inputs.channel_offset, 0, (int)cur.channels - n_channels);
 
@@ -211,10 +212,9 @@ void Granola::operator()(tick t)
   if(live_out_channels < wanted_channels && outputs.audio.request_channels)
     outputs.audio.request_channels(wanted_channels);
   // The outputs the grains play in: a single channel in all of them, as
-  // before Outputs; at most as many as a grain has levels
-  const int out_channels = std::min(
-      n_channels == 1 ? live_out_channels : std::min(wanted_channels, live_out_channels),
-      NCHAN);
+  // before Outputs
+  const int out_channels
+      = n_channels == 1 ? live_out_channels : std::min(wanted_channels, live_out_channels);
 
   boost::container::static_vector<double, NCHAN> ampvec(n_channels, 1.);
   for(int i = 0; i < n_channels; i++)
@@ -461,23 +461,20 @@ void Granola::operator()(tick t)
           // them; Spread s mixes it with all the channels alike, as at 0
           const int places = out_channels;
           auto& pan = grains[i].m_pan;
-          pan.fill(1.f);
+          pan = {};
           if(inputs.spread > 0.f && places > 1)
           {
             const float x = std::uniform_real_distribution<float>(
                 0.f, float(places - 1))(rd);
             const int a = std::min(int(x), places - 2);
             const float t = x - a;
-            for(int c = 0; c < places; c++)
-            {
-              // Between a and a + 1: 1 at the centre, as the channels are now
-              float w = 0.f;
-              if(c == a)
-                w = std::min(1.f, std::numbers::sqrt2_v<float> * std::cos(t * std::numbers::pi_v<float> / 2.f));
-              else if(c == a + 1)
-                w = std::min(1.f, std::numbers::sqrt2_v<float> * std::sin(t * std::numbers::pi_v<float> / 2.f));
-              pan[c] = (1.f - inputs.spread) + inputs.spread * w;
-            }
+            // Between a and a + 1: 1 at the centre, as the channels are now
+            constexpr float sqrt2 = std::numbers::sqrt2_v<float>;
+            constexpr float half_pi = std::numbers::pi_v<float> / 2.f;
+            pan.all = 1.f - inputs.spread;
+            pan.a = a;
+            pan.at_a = inputs.spread * std::min(1.f, sqrt2 * std::cos(t * half_pi));
+            pan.at_b = inputs.spread * std::min(1.f, sqrt2 * std::sin(t * half_pi));
           }
           alloccheck = true;
         }
@@ -489,11 +486,19 @@ void Granola::operator()(tick t)
         std::span<double> outSamps{
             grains[i].incr((long)inputs.interp_type.value)};
 
-        // The sound's channels in turn
+        // The sound's channels in turn, in every output alike, then the
+        // grain's place among them
         const int read = std::max((int)outSamps.size(), 1);
-        for(int j = 0; j < out_channels; j++)
-          outputs.audio.samples[j][k]
-              += outSamps[j % read] * inputs.gain * grains[i].m_pan[j];
+        const auto& pan = grains[i].m_pan;
+        if(const double all = inputs.gain * pan.all; all != 0.)
+          for(int j = 0; j < out_channels; j++)
+            outputs.audio.samples[j][k] += outSamps[j % read] * all;
+        if(pan.a >= 0 && pan.a + 1 < out_channels)
+        {
+          const int a = pan.a, b = pan.a + 1;
+          outputs.audio.samples[a][k] += outSamps[a % read] * inputs.gain * pan.at_a;
+          outputs.audio.samples[b][k] += outSamps[b % read] * inputs.gain * pan.at_b;
+        }
 
         busyCount++;
       }
