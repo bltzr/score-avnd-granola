@@ -135,7 +135,18 @@ public:
     } num_voices;
     struct : halp::toggle<"Continuous", halp::toggle_setup{.init = true}>
     {
-      void update(Granola& self) { self.trigger = value; }
+      // Started: a grain at once, the next one an interval later
+      void update(Granola& self)
+      {
+        if(value && !self.clock_started)
+        {
+          self.trigger = true;
+          self.trigger_counter = 0.;
+        }
+        else if(!value)
+          self.trigger = false;
+        self.clock_started = value;
+      }
     } playing;
     halp::impulse_button<"Trigger"> trig;
     halp::midi_bus<"MIDI In", libremidi::message> midi;
@@ -458,6 +469,8 @@ public:
 
 
   bool trigger{false};
+  // Whether Continuous was turned on last, as its update() saw it
+  bool clock_started{false};
   // Samples since the last grain, with the fraction of a sample the
   // interval had: grains at the rate Density sets, not one rounded to
   // whole samples
