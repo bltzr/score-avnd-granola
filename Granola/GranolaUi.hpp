@@ -177,6 +177,12 @@ consteval halp::look dropdown_as(std::string_view name)
   l.widget = halp::control_widget::combo;
   return l;
 }
+consteval halp::look small_slider_as(std::string_view name)
+{
+  auto l = halp::label_as(name);
+  l.size = halp::control_size::compact;
+  return l;
+}
 // A dropdown the section title already names
 inline constexpr halp::look bare_dropdown{
     .hide_label = true, .widget = halp::control_widget::combo};
@@ -273,7 +279,7 @@ struct FolderFiles
 
 struct WaveformItem
 {
-  static constexpr double width() { return 815.; }
+  static constexpr double width() { return 863.; }
   static constexpr double height() { return 160.; }
   static constexpr double pad = 2.;
   static constexpr double left_pad = pad;
@@ -400,7 +406,7 @@ struct WaveformItem
       ctx.set_stroke_width(1.);
       ctx.stroke();
 
-      // Jitter ranges, both symmetric (±), as whiskers so that the window's
+      // Deviations, both symmetric (±), as whiskers so that the window's
       // fill keeps its edges: position around the start edge at the top,
       // duration around the end edge at the bottom. A jitter j spreads as
       // N(0, j / 4): the whiskers span two deviations.
@@ -666,11 +672,11 @@ struct Granola::ui
         halp_meta(layout, grid)
         halp_meta(columns, 2)
         halp::item<&ins::pos, small_knob_as("Position")> position;
-        halp::item<&ins::pos_j, small_knob_as("Jitter")> pos_jitter;
+        halp::item<&ins::pos_j, small_slider_as("Deviation")> pos_jitter;
         halp::item<&ins::dur, small_knob_as("Duration")> duration;
-        halp::item<&ins::dur_j, small_knob_as("Jitter")> dur_jitter;
+        halp::item<&ins::dur_j, small_slider_as("Deviation")> dur_jitter;
         halp::item<&ins::density, small_knob_as("Density")> density;
-        halp::item<&ins::dens_j, small_knob_as("Jitter")> dens_jitter;
+        halp::item<&ins::dens_j, small_slider_as("Deviation")> dens_jitter;
         halp::item<&ins::scan, small_knob_as("Scan")> scan;
       } knobs;
       // Folder source: Scan goes on when another of its files plays
@@ -687,7 +693,7 @@ struct Granola::ui
         halp_meta(layout, grid)
         halp_meta(columns, 2)
         halp::item<&ins::rate, small_knob_as("Pitch")> pitch;
-        halp::item<&ins::rate_j, small_knob_as("Jitter")> jitter;
+        halp::item<&ins::rate_j, small_slider_as("Deviation")> jitter;
         // How many grains play backwards
         halp::item<&ins::reverse_chance, small_knob_as("Backwards")> backwards;
       } knobs;
@@ -705,7 +711,7 @@ struct Granola::ui
         halp_meta(layout, grid)
         halp_meta(columns, 3)
         halp::item<&ins::gain, small_knob_as("Gain")> gain;
-        halp::item<&ins::gain_j, small_knob_as("Jitter")> jitter;
+        halp::item<&ins::gain_j, small_slider_as("Deviation")> jitter;
         halp::item<&ins::spread, small_knob_as("Spread")> spread;
       } knobs;
       struct
