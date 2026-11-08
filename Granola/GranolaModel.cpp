@@ -306,7 +306,16 @@ void Granola::operator()(tick t)
     scan_phase = 0.;
   scan_source = cur.data;
   scan_was_playing = inputs.playing;
-  const double scan_step = cur.frames > 0 ? inputs.scan / cur.frames : 0.;
+  // The region, as parts of the sound, in either order, two samples at least
+  const double region_lo
+      = std::clamp(std::min(inputs.sample_start.value, inputs.sample_end.value), 0.f, 1.f);
+  const double region_hi
+      = std::clamp(std::max(inputs.sample_start.value, inputs.sample_end.value), 0.f, 1.f);
+  const double region_len
+      = std::max(region_hi - region_lo, cur.frames > 0 ? 2. / cur.frames : 1.);
+
+  const double scan_step
+      = cur.frames > 0 ? inputs.scan / (cur.frames * region_len) : 0.;
 
   // The shortest grain, as a fraction of the sound at a given pitch: a time,
   // not a part of the file, so that long files still give short grains. Two
@@ -320,7 +329,8 @@ void Granola::operator()(tick t)
   // Duration ~= 0 (stale or automated) drops the spawn interval to 1 sample and
   // packs grains back-to-back up to the voice cap, and Density stops meaning
   // anything.
-  const double eff_dur = std::max((double)inputs.dur, min_dur(inputs.rate));
+  const double eff_dur
+      = std::max((double)inputs.dur * region_len, min_dur(inputs.rate));
 
   if (inputs.trig ) {
     trigger = true;
@@ -366,8 +376,9 @@ void Granola::operator()(tick t)
                         + inputs.win_coefs.value.y * wc_radius
                               * std::sin((1-inputs.win_coefs.value.x) * PI / 2.);
 
+          // In the region: fractions of it
           float pos = inputs.pos + float(scan_phase) + spread(inputs.pos_j);
-          float dur = inputs.dur + spread(inputs.dur_j);
+          float dur = (inputs.dur + spread(inputs.dur_j)) * region_len;
           float rate;
           boost::container::static_vector<double, NCHAN> spawn_ampvec = ampvec;
           // Gain jitter: some grains quieter, in decibels, down to -24 dB a
@@ -426,11 +437,16 @@ void Granola::operator()(tick t)
           dur = std::max(dur, float(min_dur(rate)));
 
           // Past the end with Scan: around again
+          // Past its end with Scan: around again; else never outside of it
           if(inputs.scan != 0.f)
             pos -= std::floor(pos);
+          else
+            pos = std::clamp(pos, 0.f, 1.f);
+          pos = float(region_lo + pos * region_len);
           grains[i].set(pos, dur, rate,
               windcoef, spawn_ampvec, spawn_src, std::move(spawn_pin),
-              inputs.loopmode, inputs.window_mode, ch_offset, n_channels);
+              inputs.loopmode, inputs.window_mode, ch_offset, n_channels, region_lo,
+              region_lo + region_len);
 
           // Stereo Spread: a place x among the output channels, between two
           // of them; Spread s mixes it with all the channels alike, as at 0

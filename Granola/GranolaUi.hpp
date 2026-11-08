@@ -303,13 +303,29 @@ struct WaveformItem
   // The ports the waveform shows and edits, in the order of ui's
   // custom_multi_control, normalized: their ranges are [0, 1]. Kept up to date
   // by the host; a drag edits them through the transaction, as one undo step.
-  enum : int { POS, DUR, POS_J, DUR_J };
-  std::array<double, 4> values{0., 0.1, 0., 0.};
+  enum : int { POS, DUR, POS_J, DUR_J, START, END };
+  std::array<double, 6> values{0., 0.1, 0., 0., 0., 1.};
   halp::multi_transaction transaction;
   float pos() const noexcept { return float(values[POS]); }
   float dur() const noexcept { return float(values[DUR]); }
   float pos_j() const noexcept { return float(values[POS_J]); }
   float dur_j() const noexcept { return float(values[DUR_J]); }
+  // The region the others are fractions of, as the processor reads it
+  double region_lo() const noexcept
+  {
+    return std::clamp(std::min(values[START], values[END]), 0., 1.);
+  }
+  double region_len() const noexcept
+  {
+    return std::clamp(std::max(values[START], values[END]), 0., 1.) - region_lo();
+  }
+  //! x of a fraction of the sound
+  double x_of(double abs) const noexcept { return left_pad + abs * draw_w(); }
+  //! x of a fraction of the region
+  double x_in_region(double rel) const noexcept
+  {
+    return x_of(region_lo() + std::clamp(rel, 0., 1.) * region_len());
+  }
   bool folder_mode{};
 
   std::function<void()> update;
@@ -368,16 +384,11 @@ struct WaveformItem
     const double p = pos() + heads.scan / 65535.;
     return p - std::floor(p);
   }
-  double win_x0() const
-  {
-    return left_pad + std::clamp(shown_pos(), 0., 1.) * draw_w();
-  }
+  double win_x0() const { return x_in_region(shown_pos()); }
   double win_x1() const
   {
-    const double p = shown_pos();
     // The shortest grains are a line: Duration at its minimum is ~0
-    const double wdur = dur() >= 1.f ? 1. : std::clamp(std::min(p + double(dur()), 1.) - p, 0., 1.);
-    return std::min(win_x0() + wdur * draw_w(), width() - pad);
+    return x_in_region(std::clamp(shown_pos(), 0., 1.) + std::clamp(double(dur()), 0., 1.));
   }
 
   void paint(auto ctx)
@@ -396,6 +407,38 @@ struct WaveformItem
 
     if(has_sound())
     {
+      // Outside of the region: dimmed, and its edges
+      const double rx0 = x_of(region_lo()), rx1 = x_of(region_lo() + region_len());
+      auto outside = ctx.to_rgba(halp::colors::background_darker);
+      outside.a = 190;
+      ctx.begin_path();
+      if(rx0 > left_pad)
+        ctx.draw_rect(left_pad, y0, rx0 - left_pad, wave_h);
+      if(rx1 < left_pad + draw_w())
+        ctx.draw_rect(rx1, y0, left_pad + draw_w() - rx1, wave_h);
+      ctx.set_fill_color(outside);
+      ctx.fill();
+      if(region_len() < 1.)
+      {
+        ctx.begin_path();
+        ctx.draw_line(rx0, top() - 4., rx0, y1);
+        ctx.draw_line(rx1, top() - 4., rx1, y1);
+        ctx.set_stroke_color(halp::colors::lighter);
+        ctx.set_stroke_width(1.);
+        ctx.stroke();
+      }
+      // Handles in the header to drag them by
+      ctx.begin_path();
+      for(double hx : {rx0, rx1})
+      {
+        ctx.move_to(hx - 4., pad + 2.);
+        ctx.line_to(hx + 4., pad + 2.);
+        ctx.line_to(hx, top() - 3.);
+        ctx.line_to(hx - 4., pad + 2.);
+      }
+      ctx.set_fill_color(halp::colors::lighter);
+      ctx.fill();
+
       const double x0 = win_x0();
       const double x1 = win_x1();
       ctx.begin_path();
@@ -429,9 +472,10 @@ struct WaveformItem
         ctx.set_stroke_width(1.);
         ctx.stroke();
       };
-      if(const double pj = pos_j() / 2. * draw_w(); pj > 0.5)
+      // Fractions of the region
+      if(const double pj = pos_j() / 2. * region_len() * draw_w(); pj > 0.5)
         whisker(x0 - pj, x0 + pj, y0 + 5.);
-      if(const double dj = dur_j() / 2. * draw_w(); dj > 0.5)
+      if(const double dj = dur_j() / 2. * region_len() * draw_w(); dj > 0.5)
         whisker(x1 - dj, x1 + dj, y1 - 5.);
 
       // One bar per playing grain, fading with the grain's window
@@ -495,8 +539,10 @@ struct WaveformItem
     none,
     window,     // vertical -> duration
     start_edge, // vertical -> position jitter
-    end_edge    // vertical -> duration jitter
+    end_edge,   // vertical -> duration jitter
+    region      // a handle of the region, in the header: Sample Start or End
   };
+  int m_region_edge{START};
   drag_zone m_zone{drag_zone::none};
   double m_press_x{}, m_press_y{};
   float m_pos0{}, m_dur0{}, m_pos_j0{}, m_dur_j0{};
@@ -504,6 +550,28 @@ struct WaveformItem
 
   bool mouse_press(double x, double y)
   {
+    // A handle of the region
+    if(has_sound() && y < top())
+    {
+      constexpr double grab = 6.;
+      const double rx0 = x_of(region_lo()), rx1 = x_of(region_lo() + region_len());
+      if(std::abs(x - rx0) <= grab || std::abs(x - rx1) <= grab)
+      {
+        // The nearest; the end when both are at the same place and it is
+        // dragged from the left of the sound
+        const bool lo = std::abs(x - rx0) < std::abs(x - rx1)
+                        || (rx0 == rx1 && rx0 > left_pad + draw_w() / 2.);
+        // Which port is the low one: Start and End may be the other way
+        const bool start_is_lo = values[START] <= values[END];
+        m_region_edge = (lo == start_is_lo) ? START : END;
+        m_zone = drag_zone::region;
+        m_dragging = true;
+        if(transaction.start)
+          transaction.start();
+        return true;
+      }
+    }
+
     // No sound, or a click on its name: choose one
     if(!has_sound() || y < top())
     {
@@ -557,7 +625,13 @@ struct WaveformItem
   {
     if(!m_dragging)
       return;
-    const float dxn = float((x - m_press_x) / draw_w());
+    if(m_zone == drag_zone::region)
+    {
+      set(m_region_edge, float(std::clamp((x - left_pad) / draw_w(), 0., 1.)));
+      return;
+    }
+    // Fractions of the region
+    const float dxn = float((x - m_press_x) / (draw_w() * std::max(region_len(), 1e-6)));
     const float dyn = float((m_press_y - y) / (bottom() - top()));
     float new_pos = m_pos0 + dxn;
     switch(m_zone)
@@ -651,10 +725,15 @@ struct Granola::ui
           halp::item<&ins::random> random;
         } folder;
       } pages;
+      // The part of the sound that plays; also by the handles over the
+      // waveform
+      halp::item<&ins::sample_start, small_slider_as("Start")> sample_start;
+      halp::item<&ins::sample_end, small_slider_as("End")> sample_end;
     } source;
 
     halp::custom_multi_control<
-        WaveformItem, &ins::pos, &ins::dur, &ins::pos_j, &ins::dur_j>
+        WaveformItem, &ins::pos, &ins::dur, &ins::pos_j, &ins::dur_j,
+        &ins::sample_start, &ins::sample_end>
         waveform;
   } sound;
 
