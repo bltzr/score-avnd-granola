@@ -64,15 +64,6 @@ public:
 
   //static const int NCHAN{8};
 
-  //! Inlets that presets which do not name their controls count in their
-  //! indices, and that Granola does not have any more: the Jitter Range of
-  //! Position, Duration, Pitch, Density and Gain, which only scaled their
-  //! Jitter.
-  static constexpr std::array<int, 5> removed_inlets() noexcept
-  {
-    return {3, 6, 9, 13, 16};
-  }
-
   struct ins
   {
     struct : halp::soundfile_port<"Sound">
@@ -92,21 +83,53 @@ public:
     // deviation Jitter / 4: at 1, 95% of the grains within ±0.5 of it (of the
     // file for Position and Duration; relative for Density and Gain).
     halp::hslider_f32<"Position Jitter", halp::range{0., 1., 0.}> pos_j;
+
+    // The five controls after each Jitter were its Jitter Range, which only
+    // scaled it. Their places are kept, so that documents restore the ports
+    // after them; each is another kind of control than it was, so that a
+    // document from then rebuilds it, and upgrade_value() gives it the value
+    // that changes nothing. Their names are new: presets of then skip them.
+
+    // Position moves through the sound by itself, at this speed: 1 goes
+    // through it in its own duration, -1 backwards, 0 stays at Position
+    struct : halp::hslider_f32<"Scan", halp::range{-2., 2., 0.}>
+    {
+      static float upgrade_value(float) { return 0.f; }
+    } scan;
     halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 0.1}> dur;
     halp::hslider_f32<"Duration Jitter", halp::range{0., 1., 0.}> dur_j;
+    // Each grain somewhere else between the output channels: 0 in all of
+    // them alike, 1 anywhere
+    struct : halp::hslider_f32<"Stereo Spread", halp::range{0., 1., 0.}>
+    {
+      static float upgrade_value(float) { return 0.f; }
+    } spread;
     struct : halp::knob_f32<"Pitch", halp::range{0.000001, 10., 1.}>
     {
       using mapper = halp::inverse_mapper<halp::pow_mapper<4>>;
     } rate;
     halp::vslider_f32<"Pitch Jitter", halp::range{0., 1., 0.}> rate_j;
+    // Pitch Jitter in semitones, the same at every pitch: at 1, 95% of the
+    // grains within an octave; else as a ratio added to Pitch
+    struct : halp::toggle<"Pitch Jitter in Semitones">
+    {
+      static float upgrade_value(float) { return 0.f; }
+    } rate_j_semitones;
     halp::toggle<"Reverse"> reverse;
     struct : halp::accurate<halp::knob_f32<"Density", halp::range{0., 256., 1.}>>
     {
       using mapper = halp::log_mapper<std::ratio<99, 100>>;
     } density;
     halp::vslider_f32<"Density Jitter", halp::range{0., 1., 0.}> dens_j;
+    // How likely a grain plays backwards; Reverse flips them all
+    struct : halp::knob_f32<"Reverse Chance", halp::range{0., 1., 0.}>
+    {
+      static float upgrade_value(float) { return 0.f; }
+    } reverse_chance;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
     halp::vslider_f32<"Gain Jitter", halp::range{0., 1., 0.}> gain_j;
+    // Unused: free for a control to come, of another kind than a knob
+    halp::knob_f32<"Gain Jitter Range", halp::range{0., 1., 1.}> gain_j_r;
     halp::xy_pad_f32<"Window coefs", halp::range{0.f, 1.f, 0.f}> win_coefs;
     struct
     {
@@ -187,6 +210,7 @@ public:
   {
     static constexpr int max_heads = 32;
     uint8_t count;
+    uint16_t scan;           // where Scan has moved Position, 0-65535
     uint8_t amp[max_heads];  // window amplitude, 0-255
     uint16_t pos[max_heads]; // position in the current sound, 0-65535
   };
@@ -217,6 +241,11 @@ public:
   uint64_t ui_sent_generation{};
   int ui_frame_counter{0}; // throttles the playheads
   bool ui_heads_shown{false};
+
+  // Where Scan has moved Position, as a part of the sound
+  double scan_phase{};
+  const void* scan_source{};
+  bool scan_was_playing{};
 
   struct MidiVoice
   {

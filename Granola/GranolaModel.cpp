@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <numbers>
 #include <string_view>
 
 namespace Granola
@@ -103,6 +104,7 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
   processor_to_ui msg{playheads{}};
   auto& ph = ossia::get<playheads>(msg.message);
   ph.count = 0;
+  ph.scan = inputs.scan != 0.f ? std::lround(scan_phase * 65535.) : 0;
   for(long i = 0; i < inputs.num_voices && i < (long)grains.size(); i++)
   {
     const auto& g = grains[i];
@@ -199,8 +201,10 @@ void Granola::operator()(tick t)
   // request_channels() bumps outputs.audio.channels now but the buffers only
   // grow next tick, so only touch channels already backed this tick.
   const int live_out_channels = (int)outputs.audio.channels;
-  if(live_out_channels < n_channels && outputs.audio.request_channels)
-    outputs.audio.request_channels(n_channels);
+  // Stereo Spread needs two channels, even for a mono sound
+  const int wanted_channels = inputs.spread > 0.f ? std::max(n_channels, 2) : n_channels;
+  if(live_out_channels < wanted_channels && outputs.audio.request_channels)
+    outputs.audio.request_channels(wanted_channels);
   const int out_channels = std::min(n_channels, live_out_channels);
 
   boost::container::static_vector<double, NCHAN> ampvec(n_channels, 1.);
@@ -267,8 +271,9 @@ void Granola::operator()(tick t)
   }
 
   // A Jitter j spreads its control as N(0, j / 4): see the inputs
+  // (a normal distribution needs a deviation above 0: scaled after)
   auto spread = [this](float jitter) {
-    return std::normal_distribution<float>(0., jitter / 4.f)(rd);
+    return jitter > 0.f ? std::normal_distribution<float>(0.f, 0.25f)(rd) * jitter : 0.f;
   };
   // Relative, and never below 0: a negative density would spawn a grain at
   // every sample
@@ -276,6 +281,28 @@ void Granola::operator()(tick t)
     return inputs.density * std::max(1. + spread(inputs.dens_j), 0.);
   };
   double density = jittered_density();
+
+  // Pitch Jitter, in semitones (6 a deviation at 1) or added to the pitch.
+  // Reverse flips the whole rate, not only its jitter, and Reverse Chance
+  // flips some grains.
+  const auto jittered_rate = [&](float base) {
+    const float rate = inputs.rate_j_semitones
+                           ? base * std::exp2(spread(inputs.rate_j) * 24.f / 12.f)
+                           : base + spread(inputs.rate_j);
+    bool backwards = inputs.reverse;
+    if(inputs.reverse_chance > 0.f
+       && std::uniform_real_distribution<float>(0.f, 1.f)(rd) < inputs.reverse_chance)
+      backwards = !backwards;
+    return backwards ? -rate : rate;
+  };
+
+  // Scan: Position moves by itself, through the sound at Scan times its
+  // speed. From Position again when the sound changes or it starts playing.
+  if(cur.data != scan_source || (inputs.playing && !scan_was_playing))
+    scan_phase = 0.;
+  scan_source = cur.data;
+  scan_was_playing = inputs.playing;
+  const double scan_step = cur.frames > 0 ? inputs.scan / cur.frames : 0.;
 
   // The shortest grain, as a fraction of the sound at a given pitch: a time,
   // not a part of the file, so that long files still give short grains. Two
@@ -301,6 +328,11 @@ void Granola::operator()(tick t)
 
   for(int k = 0; k < t.frames; k++)
   {
+    if(inputs.playing || midi_active)
+    {
+      scan_phase += scan_step;
+      scan_phase -= std::floor(scan_phase);
+    }
 
     alloccheck = false;
     maxAmp = 1;
@@ -330,7 +362,7 @@ void Granola::operator()(tick t)
                         + inputs.win_coefs.value.y * wc_radius
                               * std::sin((1-inputs.win_coefs.value.x) * PI / 2.);
 
-          float pos = inputs.pos + spread(inputs.pos_j);
+          float pos = inputs.pos + float(scan_phase) + spread(inputs.pos_j);
           float dur = inputs.dur + spread(inputs.dur_j);
           float rate;
           boost::container::static_vector<double, NCHAN> spawn_ampvec = ampvec;
@@ -360,8 +392,7 @@ void Granola::operator()(tick t)
             // Recompute pitch from current inputs.rate so glissandi take effect immediately
             float base = inputs.rate * std::pow(2.f, (midi_pending_voice - 60) / 12.f);
             // Reverse flips the whole rate, not only its jitter
-            rate = (base + spread(inputs.rate_j))
-                   * ((inputs.reverse) ? -1 : 1);
+            rate = jittered_rate(base);
 
             // Square-law velocity → perceptual gain, baked into the grain amplitude
             const float vel_gain = std::pow(midi_voices[midi_pending_voice].velocity / 127.f, 2.f);
@@ -377,8 +408,7 @@ void Granola::operator()(tick t)
           }
           else
           {
-            rate = (inputs.rate + spread(inputs.rate_j))
-                   * ((inputs.reverse) ? -1 : 1);
+            rate = jittered_rate(inputs.rate);
             trigger = false;
           }
 
@@ -387,9 +417,35 @@ void Granola::operator()(tick t)
           // file.
           dur = std::max(dur, float(min_dur(rate)));
 
+          // Past the end with Scan: around again
+          if(inputs.scan != 0.f)
+            pos -= std::floor(pos);
           grains[i].set(pos, dur, rate,
               windcoef, spawn_ampvec, spawn_src, std::move(spawn_pin),
               inputs.loopmode, inputs.window_mode, ch_offset, n_channels);
+
+          // Stereo Spread: a place x among the output channels, between two
+          // of them; Spread s mixes it with all the channels alike, as at 0
+          const int places = n_channels == 1 ? live_out_channels : out_channels;
+          auto& pan = grains[i].m_pan;
+          pan.fill(1.f);
+          if(inputs.spread > 0.f && places > 1)
+          {
+            const float x = std::uniform_real_distribution<float>(
+                0.f, float(places - 1))(rd);
+            const int a = std::min(int(x), places - 2);
+            const float t = x - a;
+            for(int c = 0; c < places; c++)
+            {
+              // Between a and a + 1: 1 at the centre, as the channels are now
+              float w = 0.f;
+              if(c == a)
+                w = std::min(1.f, std::numbers::sqrt2_v<float> * std::cos(t * std::numbers::pi_v<float> / 2.f));
+              else if(c == a + 1)
+                w = std::min(1.f, std::numbers::sqrt2_v<float> * std::sin(t * std::numbers::pi_v<float> / 2.f));
+              pan[c] = (1.f - inputs.spread) + inputs.spread * w;
+            }
+          }
           alloccheck = true;
         }
       }
@@ -404,13 +460,13 @@ void Granola::operator()(tick t)
         {
           // A single source channel is sent to every output
           for(int j = 0; j < live_out_channels; j++)
-            outputs.audio.samples[j][k] += outSamps[0] * inputs.gain;
+            outputs.audio.samples[j][k] += outSamps[0] * inputs.gain * grains[i].m_pan[j];
         }
         else
         {
           const int nw = std::min(out_channels, (int)outSamps.size());
           for(int j = 0; j < nw; j++)
-            outputs.audio.samples[j][k] += outSamps[j] * inputs.gain;
+            outputs.audio.samples[j][k] += outSamps[j] * inputs.gain * grains[i].m_pan[j];
         }
 
         busyCount++;

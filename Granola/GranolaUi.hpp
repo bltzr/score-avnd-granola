@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cfloat>
 #include <cstdio>
 #include <optional>
@@ -286,7 +287,7 @@ struct FolderFiles
 
 struct WaveformItem
 {
-  static constexpr double width() { return 740.; }
+  static constexpr double width() { return 815.; }
   static constexpr double height() { return 160.; }
   static constexpr double pad = 2.;
   static constexpr double left_pad = pad;
@@ -358,15 +359,24 @@ struct WaveformItem
   }
 
   static constexpr double draw_w() { return width() - left_pad - pad; }
+  // Position, where Scan has moved it while the grains play
+  double shown_pos() const
+  {
+    if(heads.scan == 0)
+      return pos();
+    const double p = pos() + heads.scan / 65535.;
+    return p - std::floor(p);
+  }
   double win_x0() const
   {
-    return left_pad + std::clamp(double(pos()), 0., 1.) * draw_w();
+    return left_pad + std::clamp(shown_pos(), 0., 1.) * draw_w();
   }
   double win_x1() const
   {
+    const double p = shown_pos();
     const double wdur = (dur() <= 0.f || dur() >= 1.f)
                             ? 1.
-                            : std::min(double(pos()) + double(dur()), 1.) - double(pos());
+                            : std::min(p + double(dur()), 1.) - p;
     return std::min(win_x0() + wdur * draw_w(), width() - pad);
   }
 
@@ -672,6 +682,7 @@ struct Granola::ui
         halp::item<&ins::dur_j, small_knob_as("Jitter")> dur_jitter;
         halp::item<&ins::density, small_knob_as("Density")> density;
         halp::item<&ins::dens_j, small_knob_as("Jitter")> dens_jitter;
+        halp::item<&ins::scan, small_knob_as("Scan")> scan;
       } knobs;
     } grain;
 
@@ -686,7 +697,10 @@ struct Granola::ui
         halp_meta(columns, 2)
         halp::item<&ins::rate, small_knob_as("Pitch")> pitch;
         halp::item<&ins::rate_j, small_knob_as("Jitter")> jitter;
+        // How many grains play backwards
+        halp::item<&ins::reverse_chance, small_knob_as("Backwards")> backwards;
       } knobs;
+      halp::item<&ins::rate_j_semitones, halp::label_as("Semitones")> semitones;
       halp::item<&ins::reverse> reverse;
     } pitch;
 
@@ -698,9 +712,10 @@ struct Granola::ui
       struct
       {
         halp_meta(layout, grid)
-        halp_meta(columns, 2)
+        halp_meta(columns, 3)
         halp::item<&ins::gain, small_knob_as("Gain")> gain;
         halp::item<&ins::gain_j, small_knob_as("Jitter")> jitter;
+        halp::item<&ins::spread, small_knob_as("Spread")> spread;
       } knobs;
       struct
       {
