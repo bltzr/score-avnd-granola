@@ -452,3 +452,129 @@ TEST_CASE("Window tables: the window, closely; grains keep theirs while it chang
   }
   CHECK(std::ranges::any_of(r.g->grains, [&](auto& g) { return g.m_active && g.m_win == first; }));
 }
+
+namespace
+{
+libremidi::message note(uint8_t status, int n, int vel)
+{
+  return libremidi::message{{status, uint8_t(n), uint8_t(vel)}, 0};
+}
+// Grains made over \p seconds, MIDI \p events sent at the start
+uint64_t grains_over(Rig& r, double seconds, std::vector<libremidi::message> events = {})
+{
+  const auto before = r.g->grains_made;
+  for(auto& e : events)
+    r.g->inputs.midi.midi_messages.push_back(e);
+  r.tick();
+  r.g->inputs.midi.midi_messages.clear();
+  r.run(seconds - double(Rig::F) / Rig::rate);
+  return r.g->grains_made - before;
+}
+}
+
+TEST_CASE("Density: as many grains as it says, past whole samples", "[timing]")
+{
+  // Grains of 0.05 s at Density d: d / 0.05 grains a second
+  for(float d : {1.f, 20.f, 100.f})
+  {
+    CAPTURE(d);
+    Rig r;
+    r.g->inputs.density.value = d;
+    r.run(0.2);
+    const double per_second = grains_over(r, 2.) / 2.;
+    CHECK(per_second == Catch::Approx(d / 0.05).epsilon(0.02));
+  }
+  // An interval of 1.5 samples: not one grain every 2
+  Rig r;
+  r.g->inputs.dur.value = 24.f / Rig::rate; // 24 samples
+  r.g->inputs.density.value = 16.f;         // one every 1.5 samples
+  r.run(0.1);
+  CHECK(grains_over(r, 1.) == Catch::Approx(Rig::rate / 1.5).epsilon(0.02));
+}
+
+TEST_CASE("MIDI: a grain at once, each note at its own pace, none after its end", "[midi]")
+{
+  for(int n : {36, 60, 84})
+  {
+    CAPTURE(n);
+    Rig r{4.};
+    r.g->inputs.playing.value = false;
+    r.g->inputs.density.value = 4.f;
+    r.g->inputs.dur.value = 0.01f;
+    // The first grain at once: in the first tick its first samples play
+    r.g->inputs.midi.midi_messages.push_back(note(0x90, n, 100));
+    r.tick();
+    r.g->inputs.midi.midi_messages.clear();
+    CHECK(r.g->grains_made >= 1);
+    CHECK(r.out[0][0] == 0.); // the window starts at 0
+    CHECK(std::ranges::any_of(r.out[0], [](double x) { return x != 0.; }));
+    // As many grains at a time whatever the note: its grains are as long
+    // as its pitch makes them, and come as often
+    int active = 0, ticks = 0;
+    for(int k = 0; k < 200; k++, ticks++)
+    {
+      r.tick();
+      active += std::ranges::count_if(r.g->grains, [](auto& g) { return g.m_active; });
+    }
+    CHECK(double(active) / ticks == Catch::Approx(4.).epsilon(0.15));
+    // Released: no more grains
+    r.g->inputs.midi.midi_messages.push_back(note(0x80, n, 0));
+    r.tick();
+    r.g->inputs.midi.midi_messages.clear();
+    const auto made = r.g->grains_made;
+    r.run(0.5);
+    CHECK(r.g->grains_made == made);
+  }
+}
+
+TEST_CASE("Gain follows the control smoothly; fewer voices fade out", "[output]")
+{
+  Rig r;
+  r.g->inputs.density.value = 50.f;
+  r.run(0.1);
+  r.g->inputs.gain.value = 2.f;
+  r.tick();
+  CHECK(r.g->gain_now > 0.5);
+  CHECK(r.g->gain_now < 2.);
+  r.run(0.05);
+  CHECK(r.g->gain_now == Catch::Approx(2.).epsilon(1e-3));
+
+  // From 256 voices to 1: the others stop within a few milliseconds, faded
+  r.g->inputs.num_voices.value = 1;
+  r.g->inputs.num_voices.update(*r.g);
+  REQUIRE(std::ranges::count_if(r.g->grains, [](auto& g) { return g.m_active; }) > 1);
+  r.tick();
+  CHECK(std::ranges::count_if(r.g->grains, [](auto& g) { return g.m_active; }) <= 1);
+}
+
+TEST_CASE("Spread: the same power wherever a grain is between two outputs", "[spread]")
+{
+  Rig r{1., 1, 4};
+  r.g->inputs.out_channels.value = 4;
+  r.g->inputs.spread.value = 1.f;
+  r.g->inputs.density.value = 100.f;
+  each_grain(r, 50, [](auto& g) {
+    const auto& p = g.m_pan;
+    REQUIRE(p.a >= 0);
+    CHECK(p.at_a * p.at_a + p.at_b * p.at_b == Catch::Approx(1.f).epsilon(1e-5));
+  });
+}
+
+TEST_CASE("A Sound file loaded again stops the grains reading the old one", "[safety]")
+{
+  Rig r;
+  r.g->inputs.density.value = 50.f;
+  r.run(0.1);
+  REQUIRE(std::ranges::any_of(r.g->grains, [](auto& g) { return g.m_active; }));
+  // The same file, loaded again: other data
+  auto copy = r.sound;
+  std::vector<const float*> ptrs;
+  for(auto& c : copy)
+    ptrs.push_back(c.data());
+  r.g->inputs.sound.soundfile.data = ptrs.data();
+  r.g->inputs.playing.value = false;
+  r.tick();
+  for(auto& g : r.g->grains)
+    if(g.m_active)
+      CHECK(g.m_source.data == ptrs.data());
+}
