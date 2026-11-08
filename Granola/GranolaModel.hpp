@@ -106,10 +106,11 @@ public:
     {
       static constexpr std::string_view former_name() noexcept { return "Duration Jitter"; }
     } dur_j;
-    // Each grain somewhere else between the output channels: 0 in all of
-    // them alike, 1 anywhere
-    struct : halp::hslider_f32<"Stereo Spread", halp::range{0., 1., 0.}>
+    // Each grain somewhere else between the output channels (Output
+    // Channels): 0 in all of them alike, 1 anywhere
+    struct : halp::hslider_f32<"Spread", halp::range{0., 1., 0.}>
     {
+      static constexpr std::string_view former_name() noexcept { return "Stereo Spread"; }
       static float upgrade_value(float) { return 0.f; }
     } spread;
     struct : halp::knob_f32<"Pitch", halp::range{0.000001, 10., 1.}>
@@ -225,6 +226,9 @@ public:
     // it, and no grain reads outside of it
     halp::hslider_f32<"Sample Start", halp::range{0., 1., 0.}> sample_start;
     halp::hslider_f32<"Sample End", halp::range{0., 1., 1.}> sample_end;
+    // How many outputs, 0 as many as the channels read: Spread places the
+    // grains among them
+    halp::spinbox_i32<"Output Channels", halp::range{0, NCHAN, 0}> out_channels;
 
   } inputs;
 
