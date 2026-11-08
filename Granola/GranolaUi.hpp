@@ -128,6 +128,14 @@ consteval halp::look small_slider_as(std::string_view name)
   l.size = halp::control_size::compact;
   return l;
 }
+// A slider of the region: its value while dragged or hovered, the waveform
+// shows it otherwise
+consteval halp::look region_slider_as(std::string_view name)
+{
+  auto l = small_slider_as(name);
+  l.value = halp::value_display::hover;
+  return l;
+}
 // A dropdown the section title already names
 inline constexpr halp::look bare_dropdown{
     .hide_label = true, .widget = halp::control_widget::combo};
@@ -221,7 +229,10 @@ struct SourceItem
 {
   using source_type = std::decay_t<decltype(Granola::ins{}.source.value)>;
   static constexpr double width() { return 64.; }
-  static constexpr double height() { return 22.; }
+  // Its label above the box, as score puts a port's label above its control
+  static constexpr double label_h = 12.;
+  static constexpr double box_h = 22.;
+  static constexpr double height() { return label_h + box_h; }
   static constexpr double strip = 12.; // score::Stepper::width
 
   source_type value{};
@@ -233,7 +244,7 @@ struct SourceItem
 
   void paint(auto ctx)
   {
-    constexpr double w = width(), h = height();
+    constexpr double w = width(), h = box_h, top = label_h;
     // In the colours and font of score's dropdowns
     const auto& skin = score::Skin::instance();
     const auto color = [&](const QColor& q) {
@@ -246,6 +257,15 @@ struct SourceItem
     };
     const auto box = color(skin.Emphasis2.main.brush.color());
     const auto text = color(skin.Base4.main.brush.color());
+
+    // The label, as a port's
+    ctx.begin_path();
+    ctx.set_fill_color(color(skin.HalfLight.main.brush.color()));
+    ctx.set_font(skin.Medium8Pt.family().toStdString());
+    ctx.set_font_size(skin.Medium8Pt.pixelSize() > 0 ? skin.Medium8Pt.pixelSize() : 11);
+    ctx.draw_text(0., 9.5, "Source");
+    ctx.fill();
+    ctx.translate(0., top);
 
     // The box, its orange edge
     ctx.begin_path();
@@ -287,8 +307,10 @@ struct SourceItem
   bool mouse_press(double x, double y)
   {
     source_type v = value == source_type::Folder ? source_type::File : source_type::Folder;
+    if(y < label_h)
+      return false;
     if(x >= width() - 1. - strip)
-      v = y < height() / 2. ? source_type::Folder : source_type::File;
+      v = y < label_h + box_h / 2. ? source_type::Folder : source_type::File;
     if(v == value)
       return true;
     if(pick)
@@ -730,15 +752,22 @@ struct Granola::ui
     halp_meta(layout, section)
     halp_meta(background, background_mid)
 
+    // Where the sound comes from, which one, the part of it that plays: one
+    // row, the labels above the controls, the cells at the top and left
     struct source_t
     {
-      halp_meta(layout, hbox)
+      halp_meta(layout, grid)
+      // The Source's port, its item, the pages, Start, End, Wrap at end
+      halp_meta(columns, 6)
+      halp_meta(alignment, halp::alignments::left)
+      halp_meta(spacing, 6)
       halp::custom_control<SourceItem, &ins::source> source;
 
       struct pages_t
       {
         halp_meta(layout, tabs)
         halp_flag(hide_tabs);
+        halp_meta(padding, 0)
         static constexpr auto model = &ins::source;
         struct
         {
@@ -752,23 +781,35 @@ struct Granola::ui
         struct
         {
           halp_meta(name, "Folder")
-          halp_meta(layout, hbox)
-          path_control<&ins::sounds> folder;
-          struct : settable<&ins::sound_file, bare_dropdown>
+          halp_meta(layout, grid)
+          halp_meta(columns, 3)
+          halp_meta(alignment, halp::alignments::left)
+          // In the row's cell: its labels at the height of the row's others
+          halp_meta(padding, 0)
+          halp_meta(spacing, 0)
+          path_control<&ins::sounds, halp::label_as("Folder")> folder;
+          struct : settable<&ins::sound_file, dropdown_as("File")>
           {
             // Room for file names, whatever the folder's files are
             static constexpr double width() { return 150.; }
           } sound_file;
           // Which file each grain plays
-          halp::item<&ins::order, bare_dropdown> order;
+          halp::item<&ins::order, dropdown_as("Order")> order;
         } folder;
       } pages;
       // The part of the sound that plays; also by the handles over the
       // waveform
-      halp::item<&ins::sample_start, small_slider_as("Start")> sample_start;
-      halp::item<&ins::sample_end, small_slider_as("End")> sample_end;
-      // Grains reaching the end of the region go on from its start
-      halp::item<&ins::loopmode, halp::label_as("Wrap at end")> wrap;
+      halp::item<&ins::sample_start, region_slider_as("Start")> sample_start;
+      halp::item<&ins::sample_end, region_slider_as("End")> sample_end;
+      // Grains reaching the end of the region go on from its start. A toggle
+      // has its label beside it: in the row of the controls, under the labels
+      struct
+      {
+        halp_meta(layout, vbox)
+        halp_meta(padding, 0)
+        halp::spacing labels{.width = 0, .height = 14};
+        halp::item<&ins::loopmode, halp::label_as("Wrap at end")> wrap;
+      } wrap;
     } source;
 
     halp::custom_multi_control<
@@ -777,11 +818,49 @@ struct Granola::ui
         waveform;
   } sound;
 
-  // In signal order: where and how long grains are and how many, their pitch,
-  // their level, and what plays them
+  // What plays the grains, then in signal order: where and how long grains
+  // are and how many, their pitch, their level, their shape
   struct
   {
     halp_meta(layout, hbox)
+
+    struct
+    {
+      halp_meta(name, "Play")
+      halp_meta(layout, section)
+      halp_meta(background, background_mid)
+      struct
+      {
+        halp_meta(layout, hbox)
+        halp::item<&ins::playing> playing;
+        halp::item<&ins::trig> trigger;
+        halp::item<&ins::midi_gate, halp::label_as("MIDI")> midi;
+      } transport;
+      struct
+      {
+        halp_meta(layout, hbox)
+        halp::item<&ins::num_voices, halp::label_as("Voices")> voices;
+        halp::item<&ins::interp_type, dropdown_as("Interpolation")> interpolation;
+      } engine;
+      // Position moving by itself; with the folder, across its files or not
+      struct
+      {
+        halp_meta(layout, hbox)
+        halp::item<&ins::scan, small_knob_as("Scan")> scan;
+        halp::item<&ins::scan_mode, bare_dropdown> scan_mode;
+        // Only for the folder's sounds
+        struct
+        {
+          halp_meta(layout, hbox)
+          static constexpr auto condition()
+          {
+            using source = std::decay_t<decltype(ins{}.source.value)>;
+            return halp::enabled_when<&ins::source, source::Folder>{};
+          }
+          halp::item<&ins::scan_across, halp::label_as("Across sounds")> scan_across;
+        } across;
+      } scan;
+    } play;
 
     struct
     {
@@ -858,44 +937,6 @@ struct Granola::ui
         halp::custom_control<WindowShapeItem, &ins::win_coefs> pad;
       } editor;
     } window;
-
-    struct
-    {
-      halp_meta(name, "Play")
-      halp_meta(layout, section)
-      halp_meta(background, background_mid)
-      struct
-      {
-        halp_meta(layout, hbox)
-        halp::item<&ins::playing> playing;
-        halp::item<&ins::trig> trigger;
-        halp::item<&ins::midi_gate, halp::label_as("MIDI")> midi;
-      } transport;
-      struct
-      {
-        halp_meta(layout, hbox)
-        halp::item<&ins::num_voices, halp::label_as("Voices")> voices;
-        halp::item<&ins::interp_type, dropdown_as("Interpolation")> interpolation;
-      } engine;
-      // Position moving by itself; with the folder, across its files or not
-      struct
-      {
-        halp_meta(layout, hbox)
-        halp::item<&ins::scan, small_knob_as("Scan")> scan;
-        halp::item<&ins::scan_mode, bare_dropdown> scan_mode;
-        // Only for the folder's sounds
-        struct
-        {
-          halp_meta(layout, hbox)
-          static constexpr auto condition()
-          {
-            using source = std::decay_t<decltype(ins{}.source.value)>;
-            return halp::enabled_when<&ins::source, source::Folder>{};
-          }
-          halp::item<&ins::scan_across, halp::label_as("Across sounds")> scan_across;
-        } across;
-      } scan;
-    } play;
   } params;
 
   void on_control_update()
