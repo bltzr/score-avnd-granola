@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <tuple>
 
 using granola_test::Rig;
@@ -284,4 +285,80 @@ TEST_CASE("Output Channels: as many outputs as asked, more or fewer", "[output]"
   r.g->inputs.out_channels.value = 0;
   r.run(0.05);
   CHECK(r.outputs() == 1); // a mono sound
+}
+
+TEST_CASE("Controls out of their ranges, NaN or infinite: no crash, finite output", "[safety]")
+{
+  const float bad[] = {std::numeric_limits<float>::quiet_NaN(),
+                       std::numeric_limits<float>::infinity(),
+                       -std::numeric_limits<float>::infinity(), 1e30f, -1e30f};
+  for(float v : bad)
+  {
+    CAPTURE(v);
+    Rig r{1., 12, 2};
+    auto& in = r.g->inputs;
+    in.pos.value = v;
+    in.pos_j.value = v;
+    in.dur.value = v;
+    in.dur_j.value = v;
+    in.rate.value = v;
+    in.rate_j.value = v;
+    in.density.value = v;
+    in.dens_j.value = v;
+    in.gain.value = v;
+    in.gain_j.value = v;
+    in.spread.value = v;
+    in.scan.value = v;
+    in.reverse_chance.value = v;
+    in.sample_start.value = v;
+    in.sample_end.value = -v;
+    in.win_coefs.value = {v, v};
+    in.num_voices.value = 100000;
+    in.src_channels.value = 50;
+    in.channel_offset.value = 50;
+    in.out_channels.value = 100000;
+    r.run(0.2);
+    for(int c = 0; c < r.outputs(); c++)
+      for(double x : r.out[c])
+        REQUIRE(std::isfinite(x));
+    // Back in range
+    CHECK(in.num_voices.value <= (int)r.g->grains.size());
+    CHECK(in.out_channels.value <= Granola::Granola::max_outputs);
+    CHECK(std::isfinite(in.pos.value));
+    CHECK(std::isfinite(in.win_coefs.value.x));
+  }
+}
+
+TEST_CASE("Grains at the very end of the sound, or of a region at its end", "[safety]")
+{
+  for(auto interp : {0, 1, 2})
+    for(bool wrap : {false, true})
+    {
+      CAPTURE(interp, wrap);
+      Rig r{0.1, 2, 2};
+      auto& in = r.g->inputs;
+      in.interp_type.value = decltype(in.interp_type.value)(interp);
+      in.loopmode.value = wrap;
+      in.pos.value = 1.f;
+      in.reverse_chance.value = 0.5f;
+      in.density.value = 200.f;
+      r.run(0.2);
+      in.sample_start.value = 1.f;
+      in.sample_end.value = 1.f;
+      in.pos.value = 0.5f;
+      r.run(0.2);
+      for(double x : r.out[0])
+        REQUIRE(std::isfinite(x));
+    }
+}
+
+TEST_CASE("Preparing again, e.g. for other outputs, keeps the grains playing", "[safety]")
+{
+  Rig r;
+  r.g->inputs.density.value = 100.f;
+  r.run(0.2);
+  const auto active = std::ranges::count_if(r.g->grains, [](auto& g) { return g.m_active; });
+  REQUIRE(active > 0);
+  r.g->prepare({.rate = double(Rig::rate), .frames = Rig::F});
+  CHECK(std::ranges::count_if(r.g->grains, [](auto& g) { return g.m_active; }) == active);
 }

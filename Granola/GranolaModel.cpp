@@ -1,6 +1,10 @@
 #include "Granola.hpp"
 #include "utils.hpp"
 
+#include <ossia/math/safe_math.hpp>
+
+#include <avnd/introspection/input.hpp>
+#include <avnd/introspection/range.hpp>
 #include <boost/container/static_vector.hpp>
 
 #include <algorithm>
@@ -19,8 +23,10 @@ void Granola::prepare(setup info)
   ms2samps = samplerate * 0.001;
 
   // Every grain Max Voices allows is made here, with its buffers: neither
-  // adding nor removing voices allocates or frees on the audio thread.
-  resize(max_voices);
+  // adding nor removing voices allocates or frees on the audio thread. The
+  // host prepares again when the outputs change: the grains then play on.
+  if(grains.size() != std::size_t(max_voices))
+    resize(max_voices);
   set_voice_count(inputs.num_voices);
 }
 
@@ -112,7 +118,9 @@ int Granola::output_channels(int sound_channels) const noexcept
 {
   const int read = inputs.src_channels <= 0
                        ? std::min(sound_channels, NCHAN)
-                       : std::clamp((int)inputs.src_channels, 1, std::max(sound_channels, 1));
+                       : std::clamp(
+                           (int)inputs.src_channels, 1,
+                           std::max(std::min(sound_channels, NCHAN), 1));
   const int n = inputs.out_channels <= 0
                     ? read
                     : std::min((int)inputs.out_channels, max_outputs);
@@ -136,7 +144,7 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
   ph.count = 0;
   ph.scanning = inputs.scan != 0.f;
   ph.scan = ph.scanning ? std::lround(scanned(inputs.pos + scan_phase) * 65535.) : 0;
-  for(long i = 0; i < inputs.num_voices && i < (long)grains.size(); i++)
+  for(long i = 0; i < std::min<long>(inputs.num_voices, (long)grains.size()); i++)
   {
     const auto& g = grains[i];
     // Only the grains of the sound that is shown: random mode plays others
@@ -155,9 +163,53 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
   send_message(std::move(msg));
 }
 
+void Granola::sanitize_inputs() noexcept
+{
+  // In range, and the default for NaN or infinity
+  const auto fix = []<typename V>(V& v, auto lo, auto hi, auto init) {
+    if constexpr(std::is_floating_point_v<V>)
+      v = ossia::safe_isfinite(v) ? std::clamp(v, V(lo), V(hi)) : V(init);
+    else
+      v = std::clamp(v, V(lo), V(hi));
+  };
+  avnd::input_introspection<Granola>::for_all(inputs, [&]<typename F>(F& field) {
+    if constexpr(avnd::has_range<F> && requires { field.value; })
+    {
+      using V = std::decay_t<decltype(field.value)>;
+      static constexpr auto r = avnd::get_range<F>();
+      if constexpr(
+          (std::is_floating_point_v<V> || std::is_integral_v<V>) && !std::is_same_v<V, bool>
+          && requires { V(r.min); V(r.max); V(r.init); })
+      {
+        fix(field.value, r.min, r.max, r.init);
+      }
+      else if constexpr(requires { field.value.x; field.value.y; })
+      {
+        // An xy pad: one range for both axes, a point to start from
+        if constexpr(requires { r.init.x; })
+        {
+          fix(field.value.x, r.min, r.max, r.init.x);
+          fix(field.value.y, r.min, r.max, r.init.y);
+        }
+        else
+        {
+          fix(field.value.x, r.min, r.max, r.init);
+          fix(field.value.y, r.min, r.max, r.init);
+        }
+      }
+    }
+  });
+}
+
 void Granola::operator()(tick t)
 {
   using namespace std;
+
+  // score keeps the values of a cable, automation or OSC as they come: past
+  // the controls' ranges, NaN or infinite. They reach indices and the
+  // window's math.
+  sanitize_inputs();
+  const long voices = std::clamp<long>(inputs.num_voices, 0, (long)grains.size());
 
   // A changed Sound file is freed once replaced: the grains still reading it
   // stop. The grains of the folder pin their file and play on.
@@ -228,7 +280,7 @@ void Granola::operator()(tick t)
   // mono sound in all of them
   const int n_channels = inputs.src_channels <= 0
                              ? std::min((int)cur.channels, NCHAN)
-                             : CLAMP(inputs.src_channels, 1, (int)cur.channels);
+                             : std::clamp((int)inputs.src_channels, 1, std::min((int)cur.channels, NCHAN));
   const int ch_offset
       = CLAMP(inputs.channel_offset, 0, (int)cur.channels - n_channels);
 
@@ -407,12 +459,12 @@ void Granola::operator()(tick t)
       outputs.audio.samples[i][k] = 0.;
     }
 
-    for(long i = 0; i < inputs.num_voices; i++)
+    for(long i = 0; i < voices; i++)
     {
       const bool should_spawn = midi_active ? (midi_pending_voice >= 0)
                                             : trigger;
       if(!alloccheck && should_spawn
-         && busyCount < inputs.num_voices && maxAmp > 0.
+         && busyCount < voices && maxAmp > 0.
          && inputs.dur != 0. && inputs.rate != 0.)
       {
         if(!grains[i].m_active)

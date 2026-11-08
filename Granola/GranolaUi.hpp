@@ -8,6 +8,8 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QTimer>
+#include <QApplication>
 
 #include <algorithm>
 #include <array>
@@ -334,6 +336,8 @@ struct WaveformItem
   // only holds widgets)
   std::string sound_path;
   FolderFiles folder_files;
+  // Expires with the panel (the ui struct this is part of)
+  std::shared_ptr<char> m_alive = std::make_shared<char>();
   // The source as last seen, once seen: a switch to the folder is a change
   // from it, not the panel being built
   bool seen{};
@@ -572,21 +576,28 @@ struct WaveformItem
     // No sound, or a click on its name: choose one
     if(!has_sound() || y < top())
     {
-      const QString current = QString::fromStdString(waveform.file);
-      if(folder_mode)
-      {
-        const auto dir = QFileDialog::getExistingDirectory(
-            nullptr, "Folder of sounds", QFileInfo{current}.absolutePath());
-        if(!dir.isEmpty() && set_folder)
-          set_folder(dir.toStdString());
-      }
-      else
-      {
-        const auto file = QFileDialog::getOpenFileName(
-            nullptr, "Sound file", current, sound_file_filter());
-        if(!file.isEmpty() && set_sound)
-          set_sound(file.toStdString());
-      }
+      // Once the click is handled: a dialog runs an event loop, in which the
+      // host may rebuild the panel, deleting the item the click is for
+      QTimer::singleShot(0, qApp, [this, alive = std::weak_ptr<char>{m_alive}] {
+        if(alive.expired())
+          return;
+        const QString current = QString::fromStdString(waveform.file);
+        if(folder_mode)
+        {
+          const auto dir = QFileDialog::getExistingDirectory(
+              nullptr, "Folder of sounds", QFileInfo{current}.absolutePath());
+          // The panel may be gone by now as well
+          if(!dir.isEmpty() && !alive.expired() && set_folder)
+            set_folder(dir.toStdString());
+        }
+        else
+        {
+          const auto file = QFileDialog::getOpenFileName(
+              nullptr, "Sound file", current, sound_file_filter());
+          if(!file.isEmpty() && !alive.expired() && set_sound)
+            set_sound(file.toStdString());
+        }
+      });
       return true;
     }
 

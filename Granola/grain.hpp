@@ -157,9 +157,17 @@ static inline double pow_fast(double a, double b)
 {
   static_assert(4606921278410026770.0 == (double)4606921278410026770LL);
 
-  return std::bit_cast<double>(static_cast<long long>(
-      (b * (std::bit_cast<long long>(a) - 4606921278410026770LL)
-       + 4606921278410026770.0)));
+  // 0 and below have no such bit pattern; and the result must be one that
+  // a long long holds, between 0 and infinity's
+  if(!(a > 0.))
+    return b == 0. ? 1. : 0.;
+  const double bits = b * double(std::bit_cast<long long>(a) - 4606921278410026770LL)
+                      + 4606921278410026770.0;
+  if(!(bits > 0.))
+    return 0.;
+  if(bits >= 9218868437227405312.0) // infinity
+    return std::numeric_limits<double>::max();
+  return std::bit_cast<double>(static_cast<long long>(bits));
 }
 
 static inline double kumaraswamy(double x, double a, double b)
