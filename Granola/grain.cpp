@@ -51,10 +51,11 @@ void Grain::set(Params p) noexcept
   m_region_start = std::min(rs * m_last, m_last - 1.);
   m_region_len = std::clamp((re - rs) * m_last, 1., m_last - m_region_start);
 
-  // In the region, a sample before its end at the latest, never at 0
-  m_startpoint = std::clamp(
-      p.start * m_last, std::max(m_region_start, 0.00000001 * m_last),
-      m_region_start + m_region_len - 1.);
+  // In the region, a sample before its end at the latest, never at 0; in a
+  // region of one sample at the start, that sample's first part
+  const double first = std::max(m_region_start, 0.00000001 * m_last);
+  m_startpoint
+      = std::clamp(p.start * m_last, first, std::max(first, m_region_start + m_region_len - 1.));
 
   const double length = (p.duration <= 0. || p.duration * m_last >= m_region_len)
                             ? m_region_len
