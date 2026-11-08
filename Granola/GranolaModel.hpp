@@ -46,10 +46,6 @@ public:
   halp_meta(c_name, "granola")
   halp_meta(uuid, "38F9684D-54A6-4F48-91E4-3B251F0956EA")
 
-  // Radius of the (angle, amount) -> (window a, b) mapping for the Window-coefs
-  // XY pad; shared with the window-shape widget in GranolaUi.hpp.
-  static constexpr float wc_radius{64.};
-
   // Grains made in prepare(): the most Max Voices can be
   static constexpr int max_voices = 256;
 
@@ -155,7 +151,7 @@ public:
     // Unused: free for a control to come, of another kind than a knob
     halp::knob_f32<"Gain Jitter Range", halp::range{0., 1., 1.}> gain_j_r;
     // A bell by default rather than a flat window: Beta(3.3, 3.3), close to
-    // a Hann window (y is scaled by wc_radius)
+    // a Hann window (y is scaled by window_shape::radius)
     struct : halp::xy_pad_f32<"Window coefs", halp::range{0.f, 1.f, 0.f}>
     {
       static constexpr auto range()
@@ -319,6 +315,13 @@ public:
   };
 
   GrainVec grains;
+  // The windows grains read, as tables: a few, as the window may change
+  // while grains of the previous ones play (made in prepare())
+  static constexpr int window_tables_count = 8;
+  std::vector<window_table> window_tables;
+  //! A table of \p w: one built already, else one no grain reads, built;
+  //! none when every table is read by grains of other windows
+  const window_table* table_for(const window_shape& w) noexcept;
 
   std::atomic<bool> buf_soft_lock{false};
   bool alloccheck{false};

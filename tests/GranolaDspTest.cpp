@@ -362,3 +362,93 @@ TEST_CASE("Preparing again, e.g. for other outputs, keeps the grains playing", "
   r.g->prepare({.rate = double(Rig::rate), .frames = Rig::F});
   CHECK(std::ranges::count_if(r.g->grains, [](auto& g) { return g.m_active; }) == active);
 }
+
+TEST_CASE("Windows: in [0, 1], peaking at 1, at 0 at both ends", "[window]")
+{
+  using Granola::window_shape;
+  for(int kind : {0, 1, 2})
+    for(double x = 0.; x <= 1.; x += 0.125)
+      for(double y = 0.; y <= 1.; y += 0.125)
+      {
+        CAPTURE(kind, x, y);
+        const auto w = window_shape::from_pad(kind, x, y);
+        double peak = 0.;
+        for(int i = 0; i <= 20000; i++)
+        {
+          const double v = w(i / 20000.);
+          REQUIRE(std::isfinite(v));
+          REQUIRE(v >= 0.);
+          REQUIRE(v <= 1.);
+          peak = std::max(peak, v);
+        }
+        CHECK(peak == Catch::Approx(1.).margin(kind == 1 ? 1e-3 : 1e-6));
+        // Rounded at both ends: a and b above 1
+        if(w.a > 1.01 && w.b > 1.01)
+        {
+          CHECK(w(0.) == Catch::Approx(0.).margin(1e-9));
+          CHECK(w(1.) == Catch::Approx(0.).margin(1e-9));
+        }
+      }
+
+  // The default, Beta(3.3, 3.3): a bell, symmetric, its maximum in the middle
+  const auto bell = window_shape::from_pad(0, 0.5, 0.05);
+  CHECK(bell(0.5) == Catch::Approx(1.));
+  CHECK(bell(0.3) == Catch::Approx(bell(0.7)));
+  // the exact values, not pow_fast's (0.52 at 0.3)
+  CHECK(bell(0.3) == Catch::Approx(std::pow(0.3 * 0.7 / 0.25, bell.a - 1.)).epsilon(1e-9));
+}
+
+TEST_CASE("Window tables: the window, closely; grains keep theirs while it changes", "[window]")
+{
+  using Granola::window_shape;
+  Granola::window_table t;
+  for(int kind : {0, 1, 2})
+    for(double x : {0., 0.3, 0.5, 1.})
+      for(double y : {0., 0.05, 0.5, 1.})
+      {
+        CAPTURE(kind, x, y);
+        const auto w = window_shape::from_pad(kind, x, y);
+        t.build(w);
+        double worst = 0.;
+        for(int i = 0; i <= 50000; i++)
+          worst = std::max(worst, std::abs(t(i / 50000.) - w(i / 50000.)));
+        // A table said to be accurate is: the others are not read
+        if(t.accurate)
+          CHECK(worst < 2e-3);
+        else
+          CHECK(kind == 1); // only cosine spikes
+      }
+  // Most windows are read from tables
+  int accurate = 0, all = 0;
+  for(int kind : {0, 1, 2})
+    for(double x = 0.; x <= 1.; x += 0.1)
+      for(double y = 0.; y <= 1.; y += 0.1)
+      {
+        t.build(window_shape::from_pad(kind, x, y));
+        accurate += t.accurate;
+        all++;
+      }
+
+  CHECK(accurate > 0.9 * all);
+
+  Rig r;
+  r.g->inputs.density.value = 100.f;
+  r.g->inputs.dur.value = 0.3f;
+  r.run(0.1);
+  std::vector<const Granola::window_table*> before;
+  for(auto& g : r.g->grains)
+    if(g.m_active)
+      before.push_back(g.m_table);
+  REQUIRE(!before.empty());
+  const auto first = r.g->grains[0].m_win;
+  // Another window: the grains already playing keep reading theirs
+  for(int k = 0; k < 10; k++)
+  {
+    r.g->inputs.win_coefs.value = {0.1f * k, 0.1f};
+    r.tick();
+    for(auto& g : r.g->grains)
+      if(g.m_active && g.m_table)
+        REQUIRE(g.m_table->shape == g.m_win);
+  }
+  CHECK(std::ranges::any_of(r.g->grains, [&](auto& g) { return g.m_active && g.m_win == first; }));
+}

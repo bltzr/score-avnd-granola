@@ -43,81 +43,23 @@ struct WindowShapeItem
     constexpr double w = width(), h = height();
     constexpr int N = curve_points;
 
-    const double angle = (1. - value.x) * PI / 2.;
-    double a = 1. + value.y * Granola::wc_radius * std::cos(angle);
-    double b = 1. + value.y * Granola::wc_radius * std::sin(angle);
-
-    double norm = 1.;
-    switch(mode)
-    {
-      case 0: { // Beta: same coefficient clamping as GranuGrain::setBeta_ab
-        constexpr double minx = (1 / DBL_MAX) + 0.00001;
-        const double sum = a + b;
-        if(sum > 170.)
-        {
-          if(a > b)
-          {
-            a -= sum - 170.;
-            b = std::max(b, minx);
-          }
-          else
-          {
-            b -= sum - 170.;
-            a = std::max(a, minx);
-          }
-        }
-        else
-        {
-          a = CLAMP(a, minx, 170.);
-          b = CLAMP(b, minx, 170.);
-        }
-        norm = getBetaScalar(a, b, 1. / N);
-        break;
-      }
-      case 2: // Kuma
-        a = a < 1. ? 2. : a;
-        b = b < 1. ? 2. : b;
-        norm = 1. / kumaraswamy_peak(a, b);
-        break;
-      default:
-        break;
-    }
-
-    auto curve = [a, b, norm, mode = mode](double phase) {
-      double v;
-      switch(mode)
-      {
-        case 0:
-          v = betaNumerator(phase, a, b) * norm;
-          break;
-        case 1: {
-          const double px = std::pow(phase, std::exp(a / 10.));
-          v = std::pow(std::sin(PI * px), std::exp(b / 10.));
-          break;
-        }
-        case 2:
-          v = kumaraswamy(phase, a, b) * norm;
-          break;
-        default:
-          v = 0.;
-          break;
-      }
-      return CLAMP(v, 0., 1.);
-    };
+    // The window the grains play
+    const auto window = window_shape::from_pad(mode, value.x, value.y);
+    std::array<double, N + 1> level;
+    for(int i = 0; i <= N; i++)
+      level[i] = window(double(i) / N);
 
     ctx.begin_path();
     ctx.set_fill_color(halp::colors::background_darker);
     ctx.draw_rounded_rect(0., 0., w, h, 3.);
     ctx.fill();
 
+    const auto point_x = [&](int i) { return pad + double(i) / N * (w - 2. * pad); };
+    const auto point_y = [&](int i) { return h - pad - level[i] * (h - 2. * pad); };
     ctx.begin_path();
     ctx.move_to(pad, h - pad);
     for(int i = 0; i <= N; i++)
-    {
-      const double phase = double(i) / N;
-      ctx.line_to(
-          pad + phase * (w - 2. * pad), h - pad - curve(phase) * (h - 2. * pad));
-    }
+      ctx.line_to(point_x(i), point_y(i));
     ctx.line_to(w - pad, h - pad);
     ctx.close_path();
     auto fill = ctx.to_rgba(halp::colors::editable_value_dark);
@@ -126,13 +68,9 @@ struct WindowShapeItem
     ctx.fill();
 
     ctx.begin_path();
-    ctx.move_to(pad, h - pad - curve(0.) * (h - 2. * pad));
+    ctx.move_to(point_x(0), point_y(0));
     for(int i = 1; i <= N; i++)
-    {
-      const double phase = double(i) / N;
-      ctx.line_to(
-          pad + phase * (w - 2. * pad), h - pad - curve(phase) * (h - 2. * pad));
-    }
+      ctx.line_to(point_x(i), point_y(i));
     ctx.set_stroke_color(halp::colors::editable_value_light);
     ctx.set_stroke_width(1.5);
     ctx.stroke();

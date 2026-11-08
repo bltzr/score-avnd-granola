@@ -32,22 +32,18 @@ void GranuGrain::reset()
   m_chan_amp.push_back(1);
   m_buf_len = 0;
   m_incr = 0;
-  m_shape_x = 1.;
-  m_shape_y = 1.;
   m_phase_counter = 0;
-  m_window.reserve(window_cache_size);
-  m_window_update.reserve(window_cache_size);
 }
 
 void GranuGrain::set(
     double start, double dur_samps, double rate,
-    const boost::container::static_vector<double, 2>& shape_coef,
+    const Granola::window_shape& window, const Granola::window_table* table,
     const boost::container::static_vector<double, NCHAN>& amps,
     const GrainSource& src, halp::sound_pin pin,
     //const halp::soundfile_port<"Window">& wind_proxy,
     //double sr,
-    bool loopmode, long windowType, long channel_offset, long src_channels,
-    double region_start, double region_end)
+    bool loopmode, long channel_offset, long src_channels, double region_start,
+    double region_end)
 {
   using namespace std;
   // Too short to read a grain from, or nothing to read: no grain
@@ -116,7 +112,8 @@ void GranuGrain::set(
   }
 
   const auto prev_count = m_max_count;
-  m_incr = rate / m_playlen; // or m_playlen - 1?
+  const auto prev_incr = m_incr;
+  m_incr = rate / m_playlen;
   m_max_count = round(m_playlen / rate);
 
   //m_phase = rate < 0;
@@ -145,85 +142,17 @@ void GranuGrain::set(
     m_chan_amp = amps;
   }
 
-  if(prev_count != m_max_count || m_wind_type != windowType || m_shape != shape_coef)
-  {
-    m_shape = shape_coef;
-    // Within the capacity reserved in reset(): no allocation on the audio
-    // thread. The samples of longer grains past it are not cached.
-    const auto cached = std::min<long>(m_max_count + 1, window_cache_size);
-    m_window_update.clear();
-    m_window_update.resize(cached);
-    m_window.resize(cached, boost::container::default_init);
-  }
-
-  m_wind_type = windowType;
-
-  // to do soon: deal with how to switch window types, buffers?
-  if(shape_coef.size() == 2)
-  {
-    m_shape_x = shape_coef[0];
-    m_shape_y = shape_coef[1];
-  }
-
-  if(m_wind_type == 0)
-  {
-
-    //    printf("coef %f %f \n", m_shape_x, m_shape_y);
-
-    setBeta_ab(m_shape_x, m_shape_y);
-    m_wind_norm_coef = getBetaScalar(m_shape_x, m_shape_y, m_incr);
-    // printf("coef %f\n", m_wind_norm_coef);
-  }
-  else if(m_wind_type == 2)
-  {
-    m_shape_x = m_shape_x < 1 ? 2. : m_shape_x;
-    m_shape_y = m_shape_y < 1 ? 2. : m_shape_y;
-    m_wind_norm_coef = 1. / kumaraswamy_peak(m_shape_x, m_shape_y);
-  }
-  else
-    m_wind_norm_coef = 1;
-
-  // type 1 cos has no precalc coeffs
-
-  //post("%f", m_wind_max);
+  m_win = window;
+  m_table = table;
 
   m_active = true;
 }
 
-double GranuGrain::window(long phase_index)
+double GranuGrain::window(long phase_index) const noexcept
 {
-  phase_index = std::clamp(phase_index, (long)0, (long)m_max_count);
-  const bool cached = phase_index < (long)m_window_update.size();
-  if(cached && m_window_update.test(phase_index))
-    return m_window[phase_index];
-
-  auto win = [this] {
-    const double phase = m_phase_counter == m_max_count ? 1. : m_phase_counter * m_incr;
-
-    switch(m_wind_type)
-    {
-      case 0:
-
-        return CLAMP(
-            betaNumerator(phase, m_shape_x, m_shape_y) * m_wind_norm_coef, 0., 1.);
-      case 1: {
-        double px = std::pow(phase, std::exp(m_shape_x / 10.));
-        double ax = std::sin(std::numbers::pi * px);
-        return std::pow(ax, std::exp(m_shape_y / 10.));
-      }
-      case 2:
-        return kumaraswamy(phase, m_shape_x, m_shape_y) * m_wind_norm_coef;
-      default:
-        return 0.;
-    }
-  }();
-
-  if(cached)
-  {
-    m_window[phase_index] = win;
-    m_window_update.set(phase_index);
-  }
-  return win;
+  const double phase
+      = phase_index >= m_max_count ? 1. : double(std::max(phase_index, 0L)) * m_incr;
+  return m_table ? (*m_table)(phase) : m_win(phase);
 }
 
 double GranuGrain::position() const noexcept
