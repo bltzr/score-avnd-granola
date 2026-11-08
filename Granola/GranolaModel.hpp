@@ -220,6 +220,11 @@ public:
     // Scan goes on where it was when another file of the folder plays,
     // rather than from Position again
     halp::toggle<"Scan Across Sounds"> scan_across;
+    // The part of the sound that plays: Position, Duration and their
+    // Deviations are fractions of it, Scan goes through it, Loop wraps in
+    // it, and no grain reads outside of it
+    halp::hslider_f32<"Sample Start", halp::range{0., 1., 0.}> sample_start;
+    halp::hslider_f32<"Sample End", halp::range{0., 1., 1.}> sample_end;
 
   } inputs;
 

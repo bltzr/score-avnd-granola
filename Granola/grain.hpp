@@ -61,6 +61,14 @@ struct GranuGrain
 
   long m_buf_chans = 1;
   double m_buf_len = 0;
+  // The part of the buffer the grain reads, in samples: Loop wraps in it,
+  // else the grain stops at its end
+  double m_region_start = 0;
+  double m_region_len = 0;
+  double wrapInRegion(double idx) const noexcept
+  {
+    return m_region_start + wrapDouble(idx - m_region_start, m_region_len);
+  }
   double m_buf_sr = 0;
 
   bool m_loop_mode = false;
@@ -85,7 +93,8 @@ struct GranuGrain
       const GrainSource& src, halp::sound_pin pin,
       //const halp::soundfile_port<"Window">& wind_proxy, // future holder of optional window buffer
       //double sr,
-      bool loopmode, long windowType, long channel_offset, long src_channels);
+      bool loopmode, long windowType, long channel_offset, long src_channels,
+      double region_start = 0., double region_end = 1.);
 
   //std::vector<double> incr( float *bufferData, long interpType );
   std::span<double> incr(long interpType);

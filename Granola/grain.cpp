@@ -46,7 +46,8 @@ void GranuGrain::set(
     const GrainSource& src, halp::sound_pin pin,
     //const halp::soundfile_port<"Window">& wind_proxy,
     //double sr,
-    bool loopmode, long windowType, long channel_offset, long src_channels)
+    bool loopmode, long windowType, long channel_offset, long src_channels,
+    double region_start, double region_end)
 {
   using namespace std;
   m_source = src;
@@ -67,12 +68,22 @@ void GranuGrain::set(
 
   //  post("shape coef size %ld %f", shape_coef.size(), shape_coef[0] );
 
-  m_startpoint = CLAMP(start, 0.00000001, 1) * m_buf_len; // for some reason start = 0 does some crazy shit
+  m_region_start = std::clamp(region_start, 0., 1.) * m_buf_len;
+  m_region_len = std::max(
+      (std::clamp(region_end, 0., 1.) - std::clamp(region_start, 0., 1.)) * m_buf_len, 2.);
+  m_region_len = std::max(std::min(m_region_len, m_buf_len - m_region_start), 1.);
+
+  // Within the region, never at 0 exactly
+  m_startpoint = std::clamp(
+      start * m_buf_len, std::max(m_region_start, 0.00000001 * m_buf_len),
+      m_region_start + m_region_len);
 
   // duration of grain
   // or if negative use the length of the original sample scaled by ratio
 
-  double gr_dur = (dur_samps <= 0 || dur_samps >= 1 ) ?  m_buf_len : dur_samps * m_buf_len;
+  double gr_dur = (dur_samps <= 0 || dur_samps * m_buf_len >= m_region_len)
+                      ? m_region_len
+                      : dur_samps * m_buf_len;
 
 
   // phase goes 0-1
@@ -91,8 +102,8 @@ void GranuGrain::set(
   }
   else
   {
-    gr_dur = (gr_dur >= m_buf_len) ? m_buf_len : gr_dur;
-    double playmax = m_buf_len - m_startpoint;
+    // At least a sample: a grain starting at the region's end
+    double playmax = std::max(m_region_start + m_region_len - m_startpoint, 1.);
     m_playlen = std::min(round(gr_dur), playmax);
   }
 
@@ -214,7 +225,7 @@ double GranuGrain::position() const noexcept
   const double phase = m_phase_counter >= m_max_count ? 1. : m_phase_counter * m_incr;
   double idx = m_startpoint + (m_direction ? 1. - phase : phase) * m_playlen;
   if(m_loop_mode)
-    idx = wrapDouble(idx, m_buf_len);
+    idx = wrapInRegion(idx);
   return std::clamp(idx / m_buf_len, 0., 1.);
 }
 
@@ -251,7 +262,7 @@ GranuGrain::incr(const long interpType)
       _sampIdx = m_startpoint + (phase * m_playlen);
 
     if(m_loop_mode)
-      _sampIdx = wrapDouble(_sampIdx, m_buf_len);
+      _sampIdx = wrapInRegion(_sampIdx);
     return _sampIdx;
   }();
 
@@ -272,7 +283,7 @@ GranuGrain::incr(const long interpType)
           const double lowerSamp = std::floor(_sampIdx);
           const double upperSamp = std::ceil(_sampIdx);
           const double upperVal
-              = loop ? bufferData[(long)wrapDouble(upperSamp, m_buf_len)]
+              = loop ? bufferData[(long)wrapInRegion(upperSamp)]
                      : ((upperSamp < m_buf_len) ? bufferData[(long)upperSamp] : 0.0);
 
           const long lsamp = lowerSamp;
@@ -288,13 +299,11 @@ GranuGrain::incr(const long interpType)
 
           if(loop)
           {
-            a1 = lsamp - 1 < 0
-                     ? 0
-                     : bufferData
-                         [i + m_buf_chans * (long)wrapDouble(lowerSamp - 1, m_buf_len)];
+            // The channels are separate buffers: no interleaving
+            a1 = bufferData[(long)wrapInRegion(lowerSamp - 1)];
             b = bufferData[lsamp];
-            c = bufferData[(long)wrapDouble(lowerSamp + 1, m_buf_len)];
-            d = bufferData[(long)wrapDouble(lowerSamp + 2, m_buf_len)];
+            c = bufferData[(long)wrapInRegion(lowerSamp + 1)];
+            d = bufferData[(long)wrapInRegion(lowerSamp + 2)];
           }
           else
           {
