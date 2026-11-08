@@ -266,9 +266,16 @@ void Granola::operator()(tick t)
     midi_pending_voice = -1;
   }
 
-  auto dist = std::normal_distribution<float>(0., inputs.dens_j_r / 4);
-
-  double density = inputs.density * (1 + dist(rd) * inputs.dens_j);
+  // A Jitter j spreads its control as N(0, j / 4): see the inputs
+  auto spread = [this](float jitter) {
+    return std::normal_distribution<float>(0., jitter / 4.f)(rd);
+  };
+  // Relative, and never below 0: a negative density would spawn a grain at
+  // every sample
+  const auto jittered_density = [&] {
+    return inputs.density * std::max(1. + spread(inputs.dens_j), 0.);
+  };
+  double density = jittered_density();
 
   // The shortest grain, as a fraction of the sound at a given pitch: a time,
   // not a part of the file, so that long files still give short grains. Two
@@ -323,12 +330,17 @@ void Granola::operator()(tick t)
                         + inputs.win_coefs.value.y * wc_radius
                               * std::sin((1-inputs.win_coefs.value.x) * PI / 2.);
 
-          float pos = inputs.pos + std::normal_distribution<float>
-                                   (0., inputs.pos_j_r / 4)(rd) * inputs.pos_j;
-          float dur = inputs.dur + std::normal_distribution<float>
-                                   (0., inputs.dur_j_r / 4)(rd) * inputs.dur_j;
+          float pos = inputs.pos + spread(inputs.pos_j);
+          float dur = inputs.dur + spread(inputs.dur_j);
           float rate;
           boost::container::static_vector<double, NCHAN> spawn_ampvec = ampvec;
+          // Gain jitter: relative, per grain, never below silence
+          if(inputs.gain_j > 0.f)
+          {
+            const double g = std::max(1. + spread(inputs.gain_j), 0.);
+            for(auto& a : spawn_ampvec)
+              a *= g;
+          }
           // A grain of the folder pins its file, which then outlives changes
           // of the folder; random mode picks a file per grain.
           GrainSource spawn_src = cur;
@@ -348,8 +360,7 @@ void Granola::operator()(tick t)
             // Recompute pitch from current inputs.rate so glissandi take effect immediately
             float base = inputs.rate * std::pow(2.f, (midi_pending_voice - 60) / 12.f);
             // Reverse flips the whole rate, not only its jitter
-            rate = (base + std::normal_distribution<float>
-                               (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j)
+            rate = (base + spread(inputs.rate_j))
                    * ((inputs.reverse) ? -1 : 1);
 
             // Square-law velocity → perceptual gain, baked into the grain amplitude
@@ -366,8 +377,7 @@ void Granola::operator()(tick t)
           }
           else
           {
-            rate = (inputs.rate + std::normal_distribution<float>
-                                      (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j)
+            rate = (inputs.rate + spread(inputs.rate_j))
                    * ((inputs.reverse) ? -1 : 1);
             trigger = false;
           }
@@ -423,7 +433,7 @@ void Granola::operator()(tick t)
         if(midi_pending_voice >= 128)
           midi_pending_voice = -1;
         trigger_counter = 0;
-        density = inputs.density * (1 + dist(rd) * inputs.dens_j);
+        density = jittered_density();
       }
       ++trigger_counter;
     }
@@ -434,7 +444,7 @@ void Granola::operator()(tick t)
       {
         trigger = true;
         trigger_counter = 0;
-        density = inputs.density * (1 + dist(rd) * inputs.dens_j);
+        density = jittered_density();
       }
       ++trigger_counter;
     }

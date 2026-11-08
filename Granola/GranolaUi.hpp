@@ -22,8 +22,8 @@ namespace Granola
 // window shape. Dragging maps x/y like a pad.
 struct WindowShapeItem
 {
-  static constexpr double width() { return 190.; }
-  static constexpr double height() { return 140.; }
+  static constexpr double width() { return 180.; }
+  static constexpr double height() { return 124.; }
 
   halp::xy_type<float> value{};
   halp::transaction<halp::xy_type<float>> transaction;
@@ -286,7 +286,7 @@ struct FolderFiles
 
 struct WaveformItem
 {
-  static constexpr double width() { return 450.; }
+  static constexpr double width() { return 740.; }
   static constexpr double height() { return 160.; }
   static constexpr double pad = 2.;
   static constexpr double left_pad = pad;
@@ -305,15 +305,13 @@ struct WaveformItem
   // The ports the waveform shows and edits, in the order of ui's
   // custom_multi_control, normalized: their ranges are [0, 1]. Kept up to date
   // by the host; a drag edits them through the transaction, as one undo step.
-  enum : int { POS, DUR, POS_J, DUR_J, POS_J_R, DUR_J_R };
-  std::array<double, 6> values{0., 0.1, 0., 0., 1., 1.};
+  enum : int { POS, DUR, POS_J, DUR_J };
+  std::array<double, 4> values{0., 0.1, 0., 0.};
   halp::multi_transaction transaction;
   float pos() const noexcept { return float(values[POS]); }
   float dur() const noexcept { return float(values[DUR]); }
   float pos_j() const noexcept { return float(values[POS_J]); }
   float dur_j() const noexcept { return float(values[DUR_J]); }
-  float pos_j_r() const noexcept { return float(values[POS_J_R]); }
-  float dur_j_r() const noexcept { return float(values[DUR_J_R]); }
   bool folder_mode{};
 
   std::function<void()> update;
@@ -405,8 +403,8 @@ struct WaveformItem
 
       // Jitter ranges, both symmetric (±), as whiskers so that the window's
       // fill keeps its edges: position around the start edge at the top,
-      // duration around the end edge at the bottom. A jitter j of range r
-      // spreads as N(0, r/4) * j: the whiskers span two deviations.
+      // duration around the end edge at the bottom. A jitter j spreads as
+      // N(0, j / 4): the whiskers span two deviations.
       auto whisker_color = ctx.to_rgba(halp::colors::editable_value_light);
       whisker_color.a = 200;
       auto whisker = [&](double xa, double xb, double y) {
@@ -421,9 +419,9 @@ struct WaveformItem
         ctx.set_stroke_width(1.);
         ctx.stroke();
       };
-      if(const double pj = pos_j() * pos_j_r() / 2. * draw_w(); pj > 0.5)
+      if(const double pj = pos_j() / 2. * draw_w(); pj > 0.5)
         whisker(x0 - pj, x0 + pj, y0 + 5.);
-      if(const double dj = dur_j() * dur_j_r() / 2. * draw_w(); dj > 0.5)
+      if(const double dj = dur_j() / 2. * draw_w(); dj > 0.5)
         whisker(x1 - dj, x1 + dj, y1 - 5.);
 
       // One bar per playing grain, fading with the grain's window
@@ -648,25 +646,9 @@ struct Granola::ui
       } source;
 
       halp::custom_multi_control<
-          WaveformItem, &ins::pos, &ins::dur, &ins::pos_j, &ins::dur_j, &ins::pos_j_r,
-          &ins::dur_j_r>
+          WaveformItem, &ins::pos, &ins::dur, &ins::pos_j, &ins::dur_j>
           waveform;
     } sound;
-
-    // The shape of each grain
-    struct
-    {
-      halp_meta(name, "Window")
-      halp_meta(layout, section)
-      halp_meta(background, background_mid)
-      halp::control<&ins::window_mode, bare_dropdown> shape;
-      // In a row so that its port sits next to it, not above it
-      struct
-      {
-        halp_meta(layout, hbox)
-        halp::custom_control<WindowShapeItem, &ins::win_coefs> pad;
-      } editor;
-    } window;
   } top;
 
   // In signal order: where and how long grains are and how many, their pitch,
@@ -683,16 +665,13 @@ struct Granola::ui
       struct
       {
         halp_meta(layout, grid)
-        halp_meta(columns, 3)
+        halp_meta(columns, 2)
         halp::item<&ins::pos, small_knob_as("Position")> position;
         halp::item<&ins::pos_j, small_knob_as("Jitter")> pos_jitter;
-        halp::item<&ins::pos_j_r, small_knob_as("Range")> pos_range;
         halp::item<&ins::dur, small_knob_as("Duration")> duration;
         halp::item<&ins::dur_j, small_knob_as("Jitter")> dur_jitter;
-        halp::item<&ins::dur_j_r, small_knob_as("Range")> dur_range;
         halp::item<&ins::density, small_knob_as("Density")> density;
         halp::item<&ins::dens_j, small_knob_as("Jitter")> dens_jitter;
-        halp::item<&ins::dens_j_r, small_knob_as("Range")> dens_range;
       } knobs;
     } grain;
 
@@ -704,10 +683,9 @@ struct Granola::ui
       struct
       {
         halp_meta(layout, grid)
-        halp_meta(columns, 3)
+        halp_meta(columns, 2)
         halp::item<&ins::rate, small_knob_as("Pitch")> pitch;
         halp::item<&ins::rate_j, small_knob_as("Jitter")> jitter;
-        halp::item<&ins::rate_j_r, small_knob_as("Range")> range;
       } knobs;
       halp::item<&ins::reverse> reverse;
     } pitch;
@@ -720,10 +698,9 @@ struct Granola::ui
       struct
       {
         halp_meta(layout, grid)
-        halp_meta(columns, 3)
+        halp_meta(columns, 2)
         halp::item<&ins::gain, small_knob_as("Gain")> gain;
         halp::item<&ins::gain_j, small_knob_as("Jitter")> jitter;
-        halp::item<&ins::gain_j_r, small_knob_as("Range")> range;
       } knobs;
       struct
       {
@@ -732,6 +709,21 @@ struct Granola::ui
         halp::item<&ins::channel_offset, halp::label_as("Offset")> offset;
       } channels;
     } output;
+
+    // The shape of each grain
+    struct
+    {
+      halp_meta(name, "Window")
+      halp_meta(layout, section)
+      halp_meta(background, background_mid)
+      halp::control<&ins::window_mode, bare_dropdown> shape;
+      // In a row so that its port sits next to it, not above it
+      struct
+      {
+        halp_meta(layout, hbox)
+        halp::custom_control<WindowShapeItem, &ins::win_coefs> pad;
+      } editor;
+    } window;
 
     struct
     {
@@ -757,7 +749,7 @@ struct Granola::ui
 
   void on_control_update()
   {
-    auto& win = top.window;
+    auto& win = params.window;
     win.editor.pad.mode = int(win.shape.value);
     if(win.editor.pad.update)
       win.editor.pad.update();

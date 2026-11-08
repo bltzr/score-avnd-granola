@@ -64,6 +64,15 @@ public:
 
   //static const int NCHAN{8};
 
+  //! Inlets that presets which do not name their controls count in their
+  //! indices, and that Granola does not have any more: the Jitter Range of
+  //! Position, Duration, Pitch, Density and Gain, which only scaled their
+  //! Jitter.
+  static constexpr std::array<int, 5> removed_inlets() noexcept
+  {
+    return {3, 6, 9, 13, 16};
+  }
+
   struct ins
   {
     struct : halp::soundfile_port<"Sound">
@@ -79,27 +88,25 @@ public:
     //halp::soundfile_port<"Window", double> win; // not supported yet
     //halp::range_slider_f32<"In", halp::range_slider_range{-10, 100, {5, 20}}> ta_range;
     halp::hslider_f32<"Position", halp::range{0.00000001, 1., 0.00000001}> pos;
+    // Each Jitter spreads its control per grain, as a normal distribution of
+    // deviation Jitter / 4: at 1, 95% of the grains within ±0.5 of it (of the
+    // file for Position and Duration; relative for Density and Gain).
     halp::hslider_f32<"Position Jitter", halp::range{0., 1., 0.}> pos_j;
-    halp::knob_f32<"Position Jitter Range", halp::range{0., 1., 1.}> pos_j_r;
     halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 0.1}> dur;
     halp::hslider_f32<"Duration Jitter", halp::range{0., 1., 0.}> dur_j;
-    halp::knob_f32<"Duration Jitter Range", halp::range{0., 1., 1.}> dur_j_r;
     struct : halp::knob_f32<"Pitch", halp::range{0.000001, 10., 1.}>
     {
       using mapper = halp::inverse_mapper<halp::pow_mapper<4>>;
     } rate;
     halp::vslider_f32<"Pitch Jitter", halp::range{0., 1., 0.}> rate_j;
-    halp::knob_f32<"Pitch Jitter Range", halp::range{0., 1., 1.}> rate_j_r;
     halp::toggle<"Reverse"> reverse;
     struct : halp::accurate<halp::knob_f32<"Density", halp::range{0., 256., 1.}>>
     {
       using mapper = halp::log_mapper<std::ratio<99, 100>>;
     } density;
     halp::vslider_f32<"Density Jitter", halp::range{0., 1., 0.}> dens_j;
-    halp::hslider_f32<"Density Jitter Range", halp::range{0., 50., 1.}> dens_j_r;
     halp::knob_f32<"Gain", halp::range{.min = 0., .max = 4., .init = 0.5}> gain;
     halp::vslider_f32<"Gain Jitter", halp::range{0., 1., 0.}> gain_j;
-    halp::knob_f32<"Gain Jitter Range", halp::range{0., 1., 1.}> gain_j_r;
     halp::xy_pad_f32<"Window coefs", halp::range{0.f, 1.f, 0.f}> win_coefs;
     struct
     {
