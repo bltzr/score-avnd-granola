@@ -329,9 +329,10 @@ void Granola::operator()(tick t)
           {
             // Recompute pitch from current inputs.rate so glissandi take effect immediately
             float base = inputs.rate * std::pow(2.f, (midi_pending_voice - 60) / 12.f);
-            rate = base + std::normal_distribution<float>
-                          (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j
-                                          * ((inputs.reverse) ? -1 : 1);
+            // Reverse flips the whole rate, not only its jitter
+            rate = (base + std::normal_distribution<float>
+                               (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j)
+                   * ((inputs.reverse) ? -1 : 1);
 
             // Square-law velocity → perceptual gain, baked into the grain amplitude
             const float vel_gain = std::pow(midi_voices[midi_pending_voice].velocity / 127.f, 2.f);
@@ -347,9 +348,9 @@ void Granola::operator()(tick t)
           }
           else
           {
-            rate = inputs.rate + std::normal_distribution<float>
-                                 (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j
-                                                 * ((inputs.reverse) ? -1 : 1);
+            rate = (inputs.rate + std::normal_distribution<float>
+                                      (0., inputs.rate_j_r / 4)(rd) * inputs.rate_j)
+                   * ((inputs.reverse) ? -1 : 1);
             trigger = false;
           }
 
