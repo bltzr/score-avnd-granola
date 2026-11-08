@@ -174,6 +174,7 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
           }
           in.on_midi.value = decltype(in.on_midi.value)(rng() % 7);
           in.velocity.value = any_value(rng);
+          in.keep_time.value = rng() % 2;
           break;
         }
         case 6:

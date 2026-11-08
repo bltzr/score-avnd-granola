@@ -881,6 +881,9 @@ struct Granola::ui
         } scan_folder;
         // Grains reaching the end of the region go on from its start
         halp::item<&ins::loopmode, halp::label_as("Wrap at end")> wrap;
+        halp::spacing none{.width = 0, .height = 0};
+        // Duration as a time, at any pitch
+        halp::item<&ins::keep_time> keep_time;
       } knobs;
     } grain;
 
