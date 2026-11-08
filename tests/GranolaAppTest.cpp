@@ -764,3 +764,114 @@ TEST_CASE("The panel's Grain, Pitch and Output columns line up", "[app][ui]")
     }
   });
 }
+
+namespace
+{
+// The Source selector of the panel: Granola's own item, as large as a dropdown
+QGraphicsItem* source_selector(Mounted& m)
+{
+  for(auto* it : m.scene.items())
+    if(m.panel->isAncestorOf(it) && it->boundingRect() == QRectF{0., 0., 64., 22.})
+      return it;
+  return nullptr;
+}
+void click(Mounted& m, QGraphicsItem* it, QPointF at)
+{
+  const QPoint p = m.view.mapFromScene(it->mapToScene(at));
+  m.mouse(QEvent::MouseButtonPress, p, Qt::LeftButton);
+  m.mouse(QEvent::MouseButtonRelease, p, Qt::NoButton);
+  spin(20);
+}
+std::string text_of(Mounted& m, const QString& name)
+{
+  return ossia::convert<std::string>(m.inlet(name).value());
+}
+//! The Source port's value, a name or the index of its entry
+bool source_is(Mounted& m, const std::string& name)
+{
+  const auto& v = m.inlet("Source").value();
+  if(auto s = v.target<std::string>())
+    return *s == name;
+  return ossia::convert<int>(v) == (name == "Folder" ? 1 : 0);
+}
+}
+
+TEST_CASE("Picking Folder in the panel takes the Sound file's folder, as one undo step", "[app][ui]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QTemporaryDir dir, other;
+    write_wav(dir.filePath("a.wav"), 220, 4800, 1);
+    write_wav(dir.filePath("b.wav"), 330, 4800, 1);
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    auto& stack = doc->commandStack();
+    Mounted m{*doc, plug};
+    m.set("Sound", dir.filePath("b.wav").toStdString());
+    auto* selector = source_selector(m);
+    REQUIRE(selector);
+
+    // A click on the selector: Folder, the Sound file's folder and the file
+    const auto picked = text_of(m, "Sound in folder");
+    const int before = stack.currentIndex();
+    click(m, selector, {20., 11.});
+    CHECK(source_is(m, "Folder"));
+    CHECK(
+        QFileInfo{QString::fromStdString(text_of(m, "Sounds"))}.canonicalFilePath()
+        == QFileInfo{dir.path()}.canonicalFilePath());
+    CHECK(text_of(m, "Sound in folder") == "b.wav");
+    CHECK(stack.currentIndex() == before + 1);
+    // The folder's files play
+    CHECK(m.play_until([&] { return m.object().inputs.sounds.size() == 2; }));
+
+    // Undone at once, all three
+    stack.undoQuiet();
+    spin(20);
+    CHECK(source_is(m, "File"));
+    CHECK(text_of(m, "Sounds").empty());
+    CHECK(text_of(m, "Sound in folder") == picked);
+
+    // A Folder set already stays
+    m.set("Sounds", other.path().toStdString());
+    m.set("Sound in folder", std::string("x.wav"));
+    click(m, selector, {20., 11.});
+    CHECK(source_is(m, "Folder"));
+    CHECK(text_of(m, "Sounds") == other.path().toStdString());
+    CHECK(text_of(m, "Sound in folder") == "x.wav");
+
+    // The strip: - back to File, + Folder; a click on the source shown does
+    // nothing
+    click(m, selector, {58., 17.});
+    CHECK(source_is(m, "File"));
+    const int at_file = stack.currentIndex();
+    click(m, selector, {58., 17.});
+    CHECK(stack.currentIndex() == at_file);
+    click(m, selector, {58., 5.});
+    CHECK(source_is(m, "Folder"));
+  });
+}
+
+TEST_CASE("Source set to Folder as automation does changes nothing else", "[app][ui]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QTemporaryDir dir;
+    write_wav(dir.filePath("a.wav"), 220, 4800, 1);
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    m.set("Sound", dir.filePath("a.wav").toStdString());
+    const auto picked = text_of(m, "Sound in folder");
+    const int before = doc->commandStack().currentIndex();
+    // Through the port, as automation, a cable, OSC or a preset
+    m.inlet("Source").setValue(std::string("Folder"));
+    m.play(10);
+    spin(20);
+    CHECK(source_is(m, "Folder"));
+    CHECK(text_of(m, "Sounds").empty());
+    CHECK(text_of(m, "Sound in folder") == picked);
+    CHECK(doc->commandStack().currentIndex() == before);
+    // The processor plays the Sound file meanwhile
+    CHECK(m.play_until([&] { return m.playing_grains(); }));
+  });
+}
