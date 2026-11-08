@@ -761,3 +761,63 @@ TEST_CASE("Density is sample-accurate: its values change the pace where they com
     CHECK(r.g->density_now <= 256.);
   }
 }
+
+TEST_CASE("Folder with no folder set plays the Sound file", "[folder]")
+{
+  using source = std::decay_t<decltype(Granola::Granola{}.inputs.source.value)>;
+  Rig r;
+  int index = -2;
+  r.g->send_message = [&](Granola::Granola::processor_to_ui m) {
+    if(auto* c = ossia::get_if<Granola::Granola::current_sound>(&m.message))
+      index = c->index;
+  };
+  r.g->inputs.source.value = source::Folder;
+  r.g->inputs.density.value = 50.f;
+  r.run(0.2);
+  // The Sound file's grains, and the panel told it is the Sound file
+  CHECK(r.g->grains_made > 0);
+  CHECK(index == -1);
+  for(auto& g : r.g->grains)
+    if(g.m_active)
+      CHECK(g.m_source.data == r.sound_ptrs.data());
+  CHECK(std::ranges::any_of(r.out[0], [](double x) { return x != 0.; }));
+
+  // A folder set: its files, none listed here, so nothing plays
+  r.g->inputs.sounds.value = "/a/folder/of/sounds";
+  r.run(0.2);
+  CHECK(std::ranges::all_of(r.out[0], [](double x) { return x == 0.; }));
+}
+
+TEST_CASE("The panel in Folder with no folder set shows the Sound file, and edits nothing", "[ui]")
+{
+  using source = std::decay_t<decltype(Granola::Granola{}.inputs.source.value)>;
+  auto u = std::make_unique<Granola::Granola::ui>();
+  auto& src = u->sound.source;
+  int sets = 0;
+  src.source.set = [&](auto) { sets++; };
+  src.pages.file.file.set = [&](auto) { sets++; };
+  src.pages.folder.folder.set = [&](auto) { sets++; };
+  src.pages.folder.sound_file.set = [&](auto) { sets++; };
+
+  src.pages.file.file.value = "/sounds/a.wav";
+  src.source.value = source::File;
+  u->on_control_update();
+  CHECK(u->sound.waveform.waveform.file == "/sounds/a.wav");
+
+  // Switched to Folder, as automation, a cable or the user would: the Sound
+  // file still, and no port edited
+  src.source.value = source::Folder;
+  u->on_control_update();
+  CHECK(u->sound.waveform.waveform.file == "/sounds/a.wav");
+  CHECK(u->sound.waveform.folder_mode);
+  u->stop();
+  CHECK(u->sound.waveform.waveform.file == "/sounds/a.wav");
+
+  // A folder set: the file picked in it
+  src.pages.folder.folder.value = "/other";
+  src.pages.folder.sound_file.value = "b.wav";
+  u->sound.waveform.playing_file = "b.wav";
+  u->on_control_update();
+  CHECK(u->sound.waveform.waveform.file == "/other/b.wav");
+  CHECK(sets == 0);
+}
