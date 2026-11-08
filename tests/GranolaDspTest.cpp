@@ -156,8 +156,8 @@ TEST_CASE("Gain Deviation: grains quieter only", "[output]")
   r.g->inputs.density.value = 200.f;
   double lo = 1e9, hi = 0;
   each_grain(r, 100, [&](auto& gr) {
-    lo = std::min(lo, gr.m_chan_amp[0]);
-    hi = std::max(hi, gr.m_chan_amp[0]);
+    lo = std::min(lo, gr.m_amp);
+    hi = std::max(hi, gr.m_amp);
   });
   CHECK(lo >= 0.);
   CHECK(hi <= 1.);

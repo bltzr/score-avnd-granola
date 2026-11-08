@@ -1,29 +1,26 @@
 #pragma once
-
-#include <array>
-#include <bit>
-#include <vector>
-//#include "buffer_proxy.hpp"
-#include "utils.hpp"
 #include "Window.hpp"
 
-#include <ossia/math/safe_math.hpp>
-
-#include <boost/container/static_vector.hpp>
-
 #include <halp/sound_set.hpp>
-#include <halp/soundfile_port.hpp>
 
-#include <cmath>
+#include <algorithm>
+#include <array>
+#include <cstdint>
 
-#include <limits>
+namespace Granola
+{
+//! How many of a sound's channels a grain reads
+inline constexpr int max_channels = 8;
 
-#define NCHAN 8
+//! How a grain reads between samples: the Interpolation control's choices
+enum class interpolation : uint8_t
+{
+  none,
+  linear,
+  cubic
+};
 
-// Lightweight view over any per-channel sample storage (soundfile port, file
-// of a sound set). Grains capture one at spawn time; those of a sound set also
-// pin the file, so a change of the folder never pulls memory out from under a
-// playing grain.
+//! A sound as a grain reads it: a buffer per channel
 struct GrainSource
 {
   const float* const* data{};
@@ -36,73 +33,38 @@ struct GrainSource
   }
 };
 
-struct GranuGrain
+/**
+ * A grain: a part of a sound, read forwards or backwards at a speed, in a
+ * region of it, under a window.
+ */
+class Grain
 {
-  bool m_active = false;
-
-  double m_startpoint; // in samples (floats for interpolation)
-  long m_buf_index;
-
-  long m_wind_index;
-  // The grain's window, from the processor, and the table of it that it
-  // reads, if any: the processor keeps it while a grain reads it
-  Granola::window_shape m_win;
-  const Granola::window_table* m_table{};
-  boost::container::static_vector<double, NCHAN> m_chan_amp;
-  // Spread: the grain's level in every output, and on top of it in two
-  // neighbouring ones, `a` and `a + 1` (none when a < 0). As small for a
-  // hundred loudspeakers as for two.
-  struct Pan
+public:
+  struct Params
   {
-    float all{1.f};
-    int a{-1};
-    float at_a{}, at_b{};
-  } m_pan;
+    double start{};    // where it starts, a part of the sound
+    double duration{}; // a part of the sound; 0 or less: the region
+    double rate{1.};   // the speed it reads at; below 0, backwards
+    window_shape window;
+    const window_table* table{}; // read rather than the window, if any
+    double amp{1.};
+    GrainSource source;
+    halp::sound_pin pin; // keeps a sound of a folder alive
+    bool wrap{};         // past the region's end, from its start
+    int channel_offset{};
+    int channels{1};     // read from channel_offset on
+    double region_start{0.}, region_end{1.};
+  };
 
+  //! Starts: no grain if the sound is too short to read one from
+  void set(Params p) noexcept;
 
-  long m_buf_chans = 1;
-  double m_buf_len = 0;
-  // The part of the buffer the grain reads, in samples: Loop wraps in it,
-  // else the grain stops at its end
-  double m_region_start = 0;
-  double m_region_len = 0;
-  double wrapInRegion(double idx) const noexcept
-  {
-    return m_region_start + wrapDouble(idx - m_region_start, m_region_len);
-  }
-  double m_buf_sr = 0;
+  //! Renders up to \p n samples, out[c][0, n) for each of its channels.
+  //! Returns how many: fewer when the grain ends, which it then does.
+  int render(int n, double* const* out, interpolation interp) noexcept;
 
-  bool m_loop_mode = false;
-
-  long m_phase_counter = 0;
-  long m_max_count = 0;
-
-  long m_channel_offset = 0;
-  long m_src_channels = 1;
-
-  boost::container::static_vector<double, NCHAN> amp_init;
-
-  // src channel count
-  //  0 = amps used as weights for 1 channel with offset option
-  //  >0 = amps used as weights for src channels, if set to 2 works for stereo files,
-
-  void
-  set(double start, double dur_samps, double rate,
-      const Granola::window_shape& window, const Granola::window_table* table,
-      const boost::container::static_vector<double, NCHAN>& amps,
-      const GrainSource& src, halp::sound_pin pin,
-      //const halp::soundfile_port<"Window">& wind_proxy, // future holder of optional window buffer
-      //double sr,
-      bool loopmode, long channel_offset, long src_channels,
-      double region_start = 0., double region_end = 1.);
-
-  //std::vector<double> incr( float *bufferData, long interpType );
-  std::span<double> incr(long interpType);
-
-  GrainSource m_source{};
-  halp::sound_pin m_pin;
-
-  void reset();
+  //! Stops at once
+  void reset() noexcept;
   //! Fades out over \p samples, then stops: a grain stopped before its end
   //! without a click
   void release(long samples) noexcept
@@ -110,20 +72,49 @@ struct GranuGrain
     if(m_active && m_release == 0)
       m_release = m_release_left = std::max(samples, 1L);
   }
-  long m_release{}, m_release_left{};
 
-  // Current read position, normalized to [0, 1] over the buffer
+  //! Where it reads, a part of the sound
   double position() const noexcept;
+  int channels() const noexcept { return m_channels; }
 
-  // Window value computed by the last call to incr()
-  double m_last_win = 0.;
-
-  double window(long phase) const noexcept;
+  // Read by the processor, its panel and its tests
+  bool m_active{false};
+  // Spread: its level in every output, and on top of it in two neighbouring
+  // ones, a and a + 1 (none when a < 0): as small for a hundred loudspeakers
+  // as for two
+  struct Pan
+  {
+    float all{1.f};
+    int a{-1};
+    float at_a{}, at_b{};
+  } m_pan;
+  window_shape m_win;
+  const window_table* m_table{};
+  double m_amp{1.};
+  GrainSource m_source{};
+  halp::sound_pin m_pin;
+  long m_phase_counter{0};
+  double m_last_win{0.}; // the window at its last sample
 
 private:
-  double m_playlen;
-  bool m_direction;
-  //double      m_phase;
-  double m_incr;
+  template <interpolation I, bool Wrap>
+  int render_as(int n, double* const* out) noexcept;
+  double read_index(double phase) const noexcept;
+  double wrap(double idx) const noexcept;
 
+  // The buffer of each channel it reads
+  std::array<const float*, max_channels> m_chan{};
+  int m_channels{1};
+
+  double m_last{0};         // its last sample: frames - 1
+  double m_region_start{0}; // in samples
+  double m_region_len{0};
+  double m_startpoint{0};
+  double m_playlen{0}; // the samples it reads
+  double m_incr{0};    // its phase, a sample further
+  long m_max_count{0}; // the samples it lasts
+  bool m_backwards{false};
+  bool m_wrap{false};
+  long m_release{0}, m_release_left{0};
 };
+}
