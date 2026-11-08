@@ -27,17 +27,14 @@ int Granola::find_folder_index()
 {
   const auto& sounds = inputs.sounds;
   const auto name = std::hash<std::string_view>{}(inputs.sound_file.value);
-  const int index = inputs.sound_index.value;
-  if(sounds.generation() != folder_index_generation || name != folder_index_name
-     || index != folder_index_index)
+  if(sounds.generation() != folder_index_generation || name != folder_index_name)
   {
     folder_index_generation = sounds.generation();
     folder_index_name = name;
-    folder_index_index = index;
     if(sounds.empty())
       folder_index = -1;
-    else if(index >= 0)
-      folder_index = std::min(index, int(sounds.size()) - 1);
+    else if(auto index = inputs.sound_file.index())
+      folder_index = std::min(*index, int(sounds.size()) - 1);
     else
     {
       folder_index = sounds.find(inputs.sound_file.value);

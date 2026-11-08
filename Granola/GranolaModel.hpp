@@ -147,16 +147,12 @@ public:
     {
       static constexpr std::string_view extensions() { return sound_extensions; }
     } sounds;
-    // The file of the folder that plays, by name: adding files keeps it
+    // The file of the folder that plays: by name, so that adding files keeps
+    // it, or by its index in the folder when it gets a number (automation,
+    // cables), clipped to the last file
     halp::folder_combobox<"Sound in folder", "Sounds", sound_extensions_lit> sound_file;
     // Every grain plays a random file of the folder instead
     halp::toggle<"Random"> random;
-    // A file of the folder by its index, for automation and cables: -1 plays
-    // the file picked by name above, 0 and more that file of the folder
-    // (clipped to the last one)
-    struct : halp::spinbox_i32<"Sound index", halp::range{-1, 4096, -1}>
-    {
-    } sound_index;
 
   } inputs;
 
@@ -242,12 +238,11 @@ public:
 
   std::size_t last_sound_path{}; // hash: stops the grains of a replaced Sound file
 
-  // The folder file the Sound index or the Sound in folder names, looked up
-  // again only when the folder, the index or the name changes
+  // The folder file the Sound in folder names or indexes, looked up again
+  // only when the folder or the value changes
   int folder_index{-1};
   uint64_t folder_index_generation{};
   std::size_t folder_index_name{};
-  int folder_index_index{-2};
   int find_folder_index();
   int random_ready_index();
 

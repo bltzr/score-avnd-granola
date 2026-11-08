@@ -10,6 +10,7 @@
 #include <QMenu>
 
 #include <algorithm>
+#include <charconv>
 #include <cfloat>
 #include <cstdio>
 
@@ -268,8 +269,9 @@ struct WaveformItem
   std::string sound_path;
   bool was_folder{};
   std::string last_folder;
-  // The folder file the processor plays, while it runs: it follows the Sound
-  // index, and the first file when the picked one is not in the folder
+  // The folder file the processor plays, while it runs: it follows an index
+  // sent to Sound in folder, and the first file when the picked one is not in
+  // the folder
   std::string playing_file;
 
   // The file shown: the Sound file, or the file picked in the folder
@@ -579,7 +581,6 @@ struct Granola::ui
           std::function<void(control_value_type)> set;
         } sound_file;
         halp::item<&ins::random> random;
-        halp::item<&ins::sound_index> sound_index;
       } folder;
     } pages;
   } source_box;
@@ -687,7 +688,13 @@ struct Granola::ui
       wf.last_folder = page.folder.value;
       const QString dir = QString::fromStdString(page.folder.value);
       const auto& picked = page.sound_file.value;
-      if(!dir.isEmpty()
+      // A number picks by index: it is not a file to look for
+      double as_index{};
+      const bool is_index
+          = !picked.empty()
+            && std::from_chars(picked.data(), picked.data() + picked.size(), as_index).ptr
+                   == picked.data() + picked.size();
+      if(!dir.isEmpty() && !is_index
          && (picked.empty() || picked == "-"
              || !QFileInfo::exists(dir + "/" + QString::fromStdString(picked))))
       {
