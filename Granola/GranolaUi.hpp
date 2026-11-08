@@ -4,9 +4,11 @@
 #include <halp/layout.hpp>
 #include <halp/waveform_view.hpp>
 
+#include <QCursor>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QMenu>
 
 #include <algorithm>
 #include <charconv>
@@ -103,6 +105,21 @@ struct WindowShapeItem
     ctx.draw_rounded_rect(0., 0., w, h, 3.);
     ctx.fill();
 
+    // A faint grid at the quarters, so that even a flat window reads as one
+    auto grid = ctx.to_rgba(halp::colors::mid);
+    grid.a = 50;
+    ctx.begin_path();
+    for(double q : {0.25, 0.5, 0.75})
+    {
+      ctx.move_to(pad + q * (w - 2. * pad), pad);
+      ctx.line_to(pad + q * (w - 2. * pad), h - pad);
+      ctx.move_to(pad, pad + q * (h - 2. * pad));
+      ctx.line_to(w - pad, pad + q * (h - 2. * pad));
+    }
+    ctx.set_stroke_color(grid);
+    ctx.set_stroke_width(1.);
+    ctx.stroke();
+
     ctx.begin_path();
     ctx.move_to(pad, h - pad);
     for(int i = 0; i <= N; i++)
@@ -172,6 +189,9 @@ consteval halp::look dropdown_as(std::string_view name)
   l.widget = halp::control_widget::combo;
   return l;
 }
+// A dropdown the section title already names
+inline constexpr halp::look bare_dropdown{
+    .hide_label = true, .widget = halp::control_widget::combo};
 
 // A control whose value the panel can also set, e.g. from the waveform's
 // gestures
@@ -258,10 +278,75 @@ struct PathChip
 // Gestures: horizontal drag = position; vertical drag = duration in the window
 // centre, position jitter at the start edge, duration jitter at the end edge.
 // Empty, a click chooses a sound file, or a folder for the Folder source.
+// The file of the folder that plays, as a chip with its full name: click to
+// pick one of the folder's files. A number (an index sent by automation or a
+// cable) shows as #N.
+struct FolderFilePicker
+{
+  static constexpr double width() { return 180.; }
+  static constexpr double height() { return 20.; }
+
+  std::string value;
+  std::string folder; // synced in ui::on_control_update
+  std::function<void(std::string)> set;
+  std::function<void()> update;
+
+  static bool is_index(const std::string& v)
+  {
+    double d{};
+    return !v.empty()
+           && std::from_chars(v.data(), v.data() + v.size(), d).ptr == v.data() + v.size();
+  }
+
+  void paint(auto ctx)
+  {
+    ctx.begin_path();
+    ctx.set_fill_color(halp::colors::background_darker);
+    ctx.draw_rounded_rect(0., 0., width(), height(), 3.);
+    ctx.fill();
+
+    std::string text = value;
+    if(value.empty() || value == "-")
+      text = "Choose a file…";
+    else if(is_index(value))
+      text = "#" + value;
+    ctx.begin_path();
+    ctx.set_fill_color(
+        value.empty() || value == "-" ? halp::colors::mid : halp::colors::lighter);
+    ctx.set_font_size(9.);
+    ctx.draw_text(6., 14., text);
+    ctx.fill();
+  }
+
+  bool mouse_press(double, double)
+  {
+    QStringList filters;
+    for(const auto& ext : QString::fromUtf8(
+                              Granola::sound_extensions.data(),
+                              qsizetype(Granola::sound_extensions.size()))
+                              .split(' ', Qt::SkipEmptyParts))
+      filters.push_back("*." + ext);
+    const auto files
+        = QDir{QString::fromStdString(folder)}.entryList(filters, QDir::Files, QDir::Name);
+    if(files.empty())
+      return true;
+    QMenu menu;
+    for(const auto& f : files)
+    {
+      auto* a = menu.addAction(f);
+      a->setCheckable(true);
+      a->setChecked(f.toStdString() == value);
+    }
+    if(auto* chosen = menu.exec(QCursor::pos()); chosen && set)
+      set(chosen->text().toStdString());
+    return true;
+  }
+};
+
 struct WaveformItem
 {
   static constexpr double width() { return 460.; }
-  static constexpr double height() { return 120.; }
+  static constexpr double height() { return 160.; }
   static constexpr double pad = 2.;
   static constexpr double left_pad = pad;
   static constexpr double header = 15.; // the name, length and channels
@@ -565,7 +650,7 @@ struct Granola::ui
       struct source_t
       {
         halp_meta(layout, hbox)
-        settable<&ins::source, dropdown_as("Source")> source;
+        settable<&ins::source, bare_dropdown> source;
 
         struct pages_t
         {
@@ -583,7 +668,7 @@ struct Granola::ui
             halp_meta(name, "Folder")
             halp_meta(layout, hbox)
             halp::custom_control<PathChip<true>, &ins::sounds> folder;
-            settable<&ins::sound_file, dropdown_as("File")> sound_file;
+            halp::custom_control<FolderFilePicker, &ins::sound_file> sound_file;
             halp::item<&ins::random> random;
           } folder;
         } pages;
@@ -598,7 +683,7 @@ struct Granola::ui
       halp_meta(name, "Window")
       halp_meta(layout, section)
       halp_meta(background, background_mid)
-      halp::control<&ins::window_mode, dropdown_as("Shape")> shape;
+      halp::control<&ins::window_mode, bare_dropdown> shape;
       halp::custom_control<WindowShapeItem, &ins::win_coefs> pad;
     } window;
   } top;
@@ -715,6 +800,9 @@ struct Granola::ui
       src.pages.file.file.update();
     if(page.folder.update)
       page.folder.update();
+    page.sound_file.folder = page.folder.value;
+    if(page.sound_file.update)
+      page.sound_file.update();
 
     // Switching to the folder the first time: the Sound file's folder, with
     // that file picked, rather than an empty folder.
