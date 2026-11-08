@@ -1,6 +1,7 @@
 
 #include "grain.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -34,8 +35,6 @@ void GranuGrain::reset()
   m_shape_x = 1.;
   m_shape_y = 1.;
   m_phase_counter = 0;
-  m_window.reserve(8192);
-  m_window_update.reserve(8192);
 }
 
 void GranuGrain::set(
@@ -96,7 +95,9 @@ void GranuGrain::set(
 
   const auto prev_count = m_max_count;
   m_incr = rate / m_playlen; // or m_playlen - 1?
-  m_max_count = round(m_playlen / rate);
+  // As many samples as a long holds at most: past that the conversion is
+  // undefined, and the grain would last for ages anyway
+  m_max_count = std::min(round(m_playlen / rate), 0x1p62);
 
   //m_phase = rate < 0;
   //printf("direction %i playlen %f count max %ld\n", m_direction, m_playlen, m_max_count);
@@ -127,10 +128,10 @@ void GranuGrain::set(
   if(prev_count != m_max_count || m_wind_type != windowType || m_shape != shape_coef)
   {
     m_shape = shape_coef;
-    m_window_update.clear();
-    m_window_update.resize(m_max_count + 1);
-    m_window.resize(m_max_count + 1, boost::container::default_init);
+    m_owner_count = 0;
+    m_window_filled = 0;
   }
+  m_grain++;
 
   m_wind_type = windowType;
 
@@ -166,35 +167,52 @@ void GranuGrain::set(
   m_active = true;
 }
 
+double GranuGrain::compute_window(long phase_counter, const window_owner& o) const noexcept
+{
+  const double phase = phase_counter == o.max_count ? 1. : phase_counter * o.incr;
+
+  switch(o.type)
+  {
+    case 0:
+
+      return CLAMP(betaNumerator(phase, o.shape_x, o.shape_y) * o.norm, 0., 1.);
+    case 1: {
+      double px = std::pow(phase, std::exp(o.shape_x / 10.));
+      double ax = std::sin(std::numbers::pi * px);
+      return std::pow(ax, std::exp(o.shape_y / 10.));
+    }
+    case 2:
+      return kumaraswamy(phase, o.shape_x, o.shape_y) * o.norm;
+    default:
+      return 0.;
+  }
+}
+
 double GranuGrain::window(long phase_index)
 {
   phase_index = std::clamp(phase_index, (long)0, (long)m_max_count);
-  if(m_window_update.test(phase_index))
-    return m_window[phase_index];
+  // Computed by a grain before: as it computed it
+  if(phase_index < m_window_filled)
+  {
+    for(int i = 0; i < m_owner_count; i++)
+      if(phase_index < m_owners[i].end)
+        return compute_window(phase_index, m_owners[i]);
+  }
 
-  auto win = [this] {
-    const double phase = m_phase_counter == m_max_count ? 1. : m_phase_counter * m_incr;
-
-    switch(m_wind_type)
-    {
-      case 0:
-
-        return CLAMP(
-            betaNumerator(phase, m_shape_x, m_shape_y) * m_wind_norm_coef, 0., 1.);
-      case 1: {
-        double px = std::pow(phase, std::exp(m_shape_x / 10.));
-        double ax = std::sin(std::numbers::pi * px);
-        return std::pow(ax, std::exp(m_shape_y / 10.));
-      }
-      case 2:
-        return kumaraswamy(phase, m_shape_x, m_shape_y) * m_wind_norm_coef;
-      default:
-        return 0.;
-    }
-  }();
-
-  m_window[phase_index] = win;
-  m_window_update.set(phase_index);
+  const window_owner self{
+      phase_index + 1, m_grain,      m_incr,    m_wind_norm_coef,
+      m_shape_x,       m_shape_y,    m_wind_type, m_max_count};
+  const double win = compute_window(m_phase_counter, self);
+  if(phase_index == m_window_filled)
+  {
+    if(m_owner_count > 0
+       && (m_owners[m_owner_count - 1].grain == m_grain
+           || m_owner_count == max_window_owners))
+      m_owners[m_owner_count - 1].end = phase_index + 1;
+    else
+      m_owners[m_owner_count++] = self;
+    m_window_filled = phase_index + 1;
+  }
   return win;
 }
 
@@ -267,10 +285,12 @@ GranuGrain::incr(halp::soundfile_port<"Sound">& snd, const long interpType)
 
           if(loop)
           {
-            a1 = lsamp - 1 < 0
-                     ? 0
-                     : bufferData
-                         [i + m_buf_chans * (long)wrapDouble(lowerSamp - 1, m_buf_len)];
+            // The sample of another channel's index, as it always read: but
+            // within the channel, past which it read whatever memory
+            // follows. There, the sample before, as for the other channels.
+            const long prev = (long)wrapDouble(lowerSamp - 1, m_buf_len);
+            const long read = i + m_buf_chans * prev;
+            a1 = lsamp - 1 < 0 ? 0 : bufferData[read <= (long)m_buf_len ? read : prev];
             b = bufferData[lsamp];
             c = bufferData[(long)wrapDouble(lowerSamp + 1, m_buf_len)];
             d = bufferData[(long)wrapDouble(lowerSamp + 2, m_buf_len)];
