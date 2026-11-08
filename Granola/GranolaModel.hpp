@@ -139,7 +139,12 @@ public:
     } playing;
     halp::impulse_button<"Trigger"> trig;
     halp::midi_bus<"MIDI In", libremidi::message> midi;
-    halp::toggle<"listening to MIDI", halp::toggle_setup{.init = true}> midi_gate;
+    // The notes of MIDI In play grains at their pitch, each at its own pace
+    // as its pitch sets the length of its grains
+    struct : halp::toggle<"Note pitch", halp::toggle_setup{.init = true}>
+    {
+      halp_meta(description, "MIDI notes play grains at their pitch, each at its own pace")
+    } note_pitch;
 
     // Where the sound comes from. Folder with no folder set reads the Sound
     // file, as the file picked in its own folder: switching to Folder plays on
@@ -164,12 +169,14 @@ public:
     // lists it, in natural order), around again after the last. Ping-pong:
     // to the last and back, the ends once. Random walk: a neighbour, mostly
     // the next or previous one, sometimes the one after, back from the ends.
-    // By MIDI note: the note picks it, (note - 60) modulo the number of files,
-    // and the note no longer transposes; grains not made by a note play the
-    // picked file. The sequences are the folder's, one for every grain, MIDI
-    // notes too: a chord goes through the files rather than every note of it
-    // playing the same one. Files not decoded yet, or which cannot be, are
-    // skipped.
+    // By MIDI note: a held note of MIDI In picks it, (note - 60) modulo the
+    // number of files, with Note pitch or not: with it, each note's grains
+    // read its file; without, the grains of Continuous and Trigger read the
+    // file of the note pressed last of the held ones. With no note held, the
+    // picked file. The other sequences are the folder's, one for every
+    // grain, MIDI notes too: a chord goes through the files rather than
+    // every note of it playing the same one. Files not decoded yet, or which
+    // cannot be, are skipped.
     struct
     {
       static clang_buggy_consteval auto name() { return "Sound Order"; }
@@ -190,9 +197,9 @@ public:
       struct range
       {
         std::pair<std::string_view, enum_type> values[7]{
-            {"Single file", Single},   {"Random", Random},
-            {"Shuffle", Shuffle},      {"Alphabetical", Alphabetical},
-            {"Ping-pong", PingPong},   {"Random walk", RandomWalk},
+            {"Single file", Single},     {"Random", Random},
+            {"Shuffle", Shuffle},        {"Alphabetical", Alphabetical},
+            {"Ping-pong", PingPong},     {"Random walk", RandomWalk},
             {"By MIDI note", ByNote}};
         enum_type init = Single;
       };
@@ -204,9 +211,44 @@ public:
         return *this;
       }
     } order;
-    // Scan goes on where it was when another file of the folder plays,
-    // rather than from Position again
-    halp::toggle<"Scan Across Sounds"> scan_across;
+    // Scan with the folder's files. Restart: from Position again when another
+    // file is picked. Continue: on where it was. Per file: each file has its
+    // place, which moves only when a grain reads that file, by as much as
+    // Scan went since the grain before: a file a grain in ten reads goes ten
+    // times slower, and its grains go on where its last ones were. With
+    // Single file, every grain reads the picked file: it goes on as with
+    // Continue, and a file picked again goes on where it was.
+    struct
+    {
+      halp_meta(
+          description,
+          "Folder only: when another file plays, Scan restarts from Position, continues, "
+          "or goes on where that file's grains were")
+      static clang_buggy_consteval auto name() { return "Scan in folder"; }
+      enum enum_type
+      {
+        Restart,
+        Continue,
+        PerFile
+      } value = Restart;
+      enum widget
+      {
+        combobox
+      };
+      struct range
+      {
+        std::pair<std::string_view, enum_type> values[3]{
+            {"Restart", Restart}, {"Continue", Continue}, {"Per file", PerFile}};
+        enum_type init = Restart;
+      };
+      operator enum_type&() noexcept { return value; }
+      operator const enum_type&() const noexcept { return value; }
+      auto& operator=(enum_type t) noexcept
+      {
+        value = t;
+        return *this;
+      }
+    } scan_folder;
     // The part of the sound that plays: Position, Duration and their
     // Deviations are fractions of it, Scan goes through it, Loop wraps in
     // it, and no grain reads outside of it
@@ -305,6 +347,7 @@ public:
     bool active{false};
     uint8_t velocity{0};
     double counter{0}; // samples since its last grain
+    uint64_t pressed{}; // when, as a count of the notes pressed
   };
   // The notes with a grain to make, one bit each
   struct note_set
@@ -375,7 +418,29 @@ public:
   uint64_t shuffle_a{1}, shuffle_b{0};
   //! The file of the folder the next grain plays, as Sound Order says, from
   //! \p note when a MIDI note makes it (else -1); -1 for none ready
-  int next_in_order(int picked, int note) noexcept;
+  int next_in_order(int picked) noexcept;
+  //! The file a MIDI note picks, (note - 60) modulo the number of files, or
+  //! the next ready one; -1 for none
+  int file_of_note(int note) const noexcept;
+  //! Of the held notes, the one pressed last; -1 for none
+  int latest_note() const noexcept;
+
+  // Scan in folder, Per file: the place of each file, by its name, kept as
+  // the folder is listed again (files added or removed move the others a
+  // little: looked for near their index). For up to max_scan_files files;
+  // past that, files share places.
+  static constexpr int max_scan_files = 4096;
+  std::vector<double> file_scan, file_scan_next;
+  std::vector<std::size_t> file_scan_name, file_scan_name_next;
+  int file_scan_count{};
+  uint64_t file_scan_generation{~uint64_t(0)};
+  // How far Scan went, not wrapped; as far as when the last grain was made
+  double scan_travel{}, scan_travel_at_grain{};
+  int ui_shown_index{-1};
+  //! The places of the files as the folder is listed now
+  void relist_file_scans() noexcept;
+  //! Scan's place \p phase as its mode keeps it
+  double wrap_scan(double phase, double scan_end) const noexcept;
   //! Shuffle: a new order of \p n files, not starting with the last one
   void reshuffle(int n) noexcept;
   //! The ready file nearest to \p i, first \p i itself; -1 for none
@@ -390,7 +455,9 @@ public:
   float samplerate{48000.f}; // until prepare()
 
   std::array<MidiVoice, 128> midi_voices{};
-  bool midi_active{false};   // true when at least one MIDI note is held
+  bool midi_active{false};   // Note pitch, and at least one MIDI note held
+  bool midi_held{false};     // at least one MIDI note held
+  uint64_t notes_pressed{};
   note_set midi_pending;
 
   // The Sound file's data, to stop the grains of a replaced one: it is freed

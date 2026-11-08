@@ -466,7 +466,7 @@ TEST_CASE("A folder dropped, played at random, changed on disk while it plays", 
 
     m.set("Sound Order", std::string("Random"));
     m.set("Scan", 1.f);
-    m.set("Scan Across Sounds", true);
+    m.set("Scan in folder", std::string("Per file"));
     m.play(40);
 
     // Files removed and added while grains read them
@@ -733,9 +733,12 @@ TEST_CASE("The panel's Grain, Pitch and Output columns line up", "[app][ui]")
         if(m.panel->isAncestorOf(port))
           x[port->port().name()] = port->scenePos().x();
     const std::vector<std::vector<QString>> columns{
-        {"Position", "Duration", "Density"},
-        {"Position Deviation", "Duration Deviation", "Density Deviation"},
-        {"Pitch", "Reverse Chance"},
+        {"Continuous", "Density", "Max Voices"},
+        {"Trigger", "Density Deviation", "Note pitch"},
+        {"Position", "Duration", "Sample Start", "Loop"},
+        {"Position Deviation", "Duration Deviation", "Sample End"},
+        {"Scan", "Scan Mode", "Scan in folder"},
+        {"Pitch", "Reverse Chance", "Interpolation mode"},
         {"Pitch Deviation", "Pitch Deviation in Semitones"},
         {"Gain", "Spread", "Source Channels"},
         {"Gain Deviation", "Output Channels", "Channel Offset"}};
