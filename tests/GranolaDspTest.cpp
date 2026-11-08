@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <set>
 #include <tuple>
 
 using granola_test::Rig;
@@ -612,8 +613,8 @@ TEST_CASE("The ports, by the names documents and presets find them by", "[ports]
       "Density", "Density Deviation", "Reverse Chance", "Gain", "Gain Deviation",
       "Window coefs", "Interpolation mode", "Window mode", "Loop",
       "Source Channels", "Channel Offset", "Max Voices", "Continuous", "Trigger",
-      "MIDI In", "listening to MIDI", "Source", "Sounds", "Sound in folder", "Sound Order",
-      "Scan Across Sounds", "Sample Start", "Sample End", "Output Channels", "Scan Mode"};
+      "MIDI In", "Note pitch", "Source", "Sounds", "Sound in folder", "Sound Order",
+      "Scan in folder", "Sample Start", "Sample End", "Output Channels", "Scan Mode"};
   std::vector<std::string_view> names;
   Granola::Granola g;
   avnd::input_introspection<Granola::Granola>::for_all(
@@ -880,6 +881,7 @@ namespace
 {
 using order = std::decay_t<decltype(Granola::Granola{}.inputs.order.value)>;
 using source_kind = std::decay_t<decltype(Granola::Granola{}.inputs.source.value)>;
+using scan_in = std::decay_t<decltype(Granola::Granola{}.inputs.scan_folder.value)>;
 
 // A folder of \p n mono files of a second, each of its own, as the host lists
 // them
@@ -888,11 +890,14 @@ struct Folder
   std::vector<std::vector<float>> data;
   std::vector<const float*> ptrs;
   std::vector<halp::sound_view> views;
+  std::vector<std::string> names;
   uint64_t generation{};
 
   explicit Folder(int n, int frames = Rig::rate)
       : data(n, std::vector<float>(frames))
   {
+    for(int k = 0; k < n; k++)
+      names.push_back("f" + std::to_string(k) + ".wav");
     for(int k = 0; k < n; k++)
       for(int i = 0; i < frames; i++)
         data[k][i] = 0.2f * std::sin(0.01f * (k + 1) * i);
@@ -900,7 +905,7 @@ struct Folder
       ptrs.push_back(d.data());
     for(int k = 0; k < n; k++)
       views.push_back(
-          {.name = "f.wav",
+          {.name = names[k],
            .data = &ptrs[k],
            .frames = frames,
            .channels = 1,
@@ -924,11 +929,11 @@ struct Folder
   }
 };
 
-std::vector<int> sequence(Granola::Granola& g, int count, int picked = 0, int note = -1)
+std::vector<int> sequence(Granola::Granola& g, int count, int picked = 0)
 {
   std::vector<int> res;
   for(int k = 0; k < count; k++)
-    res.push_back(g.next_in_order(picked, note));
+    res.push_back(g.next_in_order(picked));
   return res;
 }
 }
@@ -1053,42 +1058,134 @@ TEST_CASE("Sound Order: Random walk steps to neighbours, back from the ends", "[
     REQUIRE(i != 6);
 }
 
-TEST_CASE("Sound Order: By MIDI note, the note picks the file and does not transpose", "[order]")
+TEST_CASE("By MIDI note: (note - 60) modulo the files, the next ready one", "[midi][order]")
 {
   Rig r;
   Folder f{4};
-  f.into(*r.g, order::ByNote);
+  f.into(*r.g, order::Single);
   for(auto [n, want] : std::vector<std::pair<int, int>>{
           {60, 0}, {61, 1}, {63, 3}, {64, 0}, {59, 3}, {48, 0}, {127, 3}, {0, 0}})
   {
     CAPTURE(n);
-    CHECK(r.g->next_in_order(2, n) == want);
+    CHECK(r.g->file_of_note(n) == want);
   }
-  // Without a note: the picked file
-  CHECK(r.g->next_in_order(2, -1) == 2);
-  // An unready file: the next ready one
   f.status(1, halp::sound_status::loading);
-  CHECK(r.g->next_in_order(2, 61) == 2);
+  CHECK(r.g->file_of_note(61) == 2);
+}
 
-  // Through MIDI: the grains of note 62 read file 2, at Pitch
-  Rig m{1.};
-  Folder g{4};
-  g.into(*m.g, order::ByNote);
-  m.g->inputs.playing.value = false;
-  m.g->inputs.density.value = 4.f;
-  m.g->inputs.midi.midi_messages.push_back(note(0x90, 62, 100));
-  m.tick();
-  m.g->inputs.midi.midi_messages.clear();
-  int seen = 0;
-  each_grain(m, 50, [&](auto& gr) {
-    CHECK(g.index_of(gr.m_source.data) == 2);
-    seen++;
-  });
-  CHECK(seen > 0);
-  const auto rates = grain_rates(m, 30);
-  REQUIRE(!rates.empty());
-  for(double v : rates)
-    CHECK(v == Catch::Approx(1.).margin(0.01));
+namespace
+{
+// The files the grains made in \p ticks read, and their speeds
+struct heard
+{
+  std::set<int> files;
+  std::vector<double> rates;
+};
+heard listen(Rig& r, Folder& f, int ticks)
+{
+  heard h;
+  each_grain(r, ticks, [&](auto& gr) { h.files.insert(f.index_of(gr.m_source.data)); });
+  h.rates = grain_rates(r, 20);
+  return h;
+}
+// A rig with a folder of 4 files, file 0 picked, Note pitch and By MIDI note
+// as asked
+std::unique_ptr<Rig> midi_rig(Folder& f, bool pitch, bool file, bool continuous)
+{
+  auto r = std::make_unique<Rig>(1.);
+  f.into(*r->g, file ? order::ByNote : order::Single);
+  auto& in = r->g->inputs;
+  in.sound_file.value = "0";
+  in.note_pitch.value = pitch;
+  in.playing.value = continuous;
+  in.density.value = 4.f;
+  in.dur.value = 0.02f;
+  return r;
+}
+void press(Rig& r, int n, bool on)
+{
+  r.g->inputs.midi.midi_messages.push_back(note(on ? 0x90 : 0x80, n, on ? 100 : 0));
+  r.tick();
+  r.g->inputs.midi.midi_messages.clear();
+  // The grains of before end
+  r.run(0.1);
+}
+}
+
+TEST_CASE("MIDI: Note pitch and By MIDI note, each and both", "[midi][order]")
+{
+  const double up2 = std::exp2(2. / 12.);
+  SECTION("Both: each note's grains at its pitch, from its file")
+  {
+    Folder f{4};
+    auto r = midi_rig(f, true, true, false);
+    press(*r, 62, true);
+    const auto h = listen(*r, f, 40);
+    CHECK(h.files == std::set{2});
+    REQUIRE(!h.rates.empty());
+    for(double v : h.rates)
+      CHECK(v == Catch::Approx(up2).margin(0.01));
+  }
+  SECTION("Note pitch only: at its pitch, the file Sound Order picks")
+  {
+    Folder f{4};
+    auto r = midi_rig(f, true, false, false);
+    press(*r, 62, true);
+    const auto h = listen(*r, f, 40);
+    CHECK(h.files == std::set{0});
+    REQUIRE(!h.rates.empty());
+    for(double v : h.rates)
+      CHECK(v == Catch::Approx(up2).margin(0.01));
+  }
+  SECTION("By MIDI note only: Continuous plays the file of the note pressed last")
+  {
+    Folder f{4};
+    auto r = midi_rig(f, false, true, true);
+    press(*r, 62, true);
+    auto h = listen(*r, f, 40);
+    CHECK(h.files == std::set{2});
+    for(double v : h.rates)
+      CHECK(v == Catch::Approx(1.).margin(0.01));
+    press(*r, 63, true);
+    CHECK(listen(*r, f, 40).files == std::set{3});
+    // Released: the one held before
+    press(*r, 63, false);
+    CHECK(listen(*r, f, 40).files == std::set{2});
+    // None held: the picked file
+    press(*r, 62, false);
+    CHECK(listen(*r, f, 40).files == std::set{0});
+    // Without Continuous, the notes make no grain of their own
+    r->g->inputs.playing.value = false;
+    r->run(0.2);
+    const auto made = r->g->grains_made;
+    press(*r, 61, true);
+    r->run(0.3);
+    CHECK(r->g->grains_made == made);
+    // Trigger: a grain of the note's file
+    r->g->inputs.trig.value.emplace();
+    r->tick();
+    r->g->inputs.trig.value.reset();
+    CHECK(r->g->grains_made == made + 1);
+    for(auto& gr : r->g->grains)
+      if(gr.m_active)
+        CHECK(f.index_of(gr.m_source.data) == 1);
+  }
+  SECTION("Neither: MIDI changes nothing")
+  {
+    Folder f{4};
+    auto r = midi_rig(f, false, false, true);
+    press(*r, 62, true);
+    const auto h = listen(*r, f, 40);
+    CHECK(h.files == std::set{0});
+    for(double v : h.rates)
+      CHECK(v == Catch::Approx(1.).margin(0.01));
+    r->g->inputs.playing.value = false;
+    r->run(0.2);
+    const auto made = r->g->grains_made;
+    press(*r, 64, true);
+    r->run(0.3);
+    CHECK(r->g->grains_made == made);
+  }
 }
 
 TEST_CASE("Sound Order: the grains read the files in order", "[order]")
@@ -1122,15 +1219,15 @@ TEST_CASE("Scan's play zone moves on whichever files of the folder the grains pl
   // Few grains on the file shown among many: the play zone the panel draws
   // still follows Scan, without standing still then jumping
   for(auto o : {order::Random, order::Alphabetical, order::Shuffle, order::RandomWalk})
-    for(bool across : {false, true})
+    for(auto mode : {scan_in::Restart, scan_in::Continue})
     {
-      CAPTURE(int(o), across);
+      CAPTURE(int(o), int(mode));
       Rig r;
       Folder f{40};
       f.into(*r.g, o);
       r.g->inputs.density.value = 2.f;
       r.g->inputs.scan.value = 1.f;
-      r.g->inputs.scan_across.value = across;
+      r.g->inputs.scan_folder.value = mode;
       std::vector<std::pair<long, int>> zone; // when, where
       long now = 0;
       r.g->send_message = [&](G::processor_to_ui m) {
@@ -1156,26 +1253,115 @@ TEST_CASE("Scan's play zone moves on whichever files of the folder the grains pl
     }
 }
 
-TEST_CASE("Scan Across Sounds: Scan goes on when another file of the folder is picked", "[scan][folder]")
+TEST_CASE("Scan in folder: Restart, Continue, or each file's own place", "[scan][folder]")
 {
-  for(bool across : {false, true})
+  for(auto mode : {scan_in::Restart, scan_in::Continue, scan_in::PerFile})
   {
-    CAPTURE(across);
+    CAPTURE(int(mode));
     Rig r;
     Folder f{3, Rig::rate / 2};
     f.into(*r.g, order::Single);
     r.g->inputs.pos.value = 0.1f;
     r.g->inputs.scan.value = 1.f;
-    r.g->inputs.scan_across.value = across;
+    r.g->inputs.density.value = 20.f;
+    r.g->inputs.scan_folder.value = mode;
     r.g->inputs.sound_file.value = "0";
     r.run(0.2);
     const double before = r.g->scan_phase;
     REQUIRE(before > 0.3);
     r.g->inputs.sound_file.value = "2";
     r.tick();
-    if(across)
-      CHECK(r.g->scan_phase > before);
-    else
-      CHECK(r.g->scan_phase < 0.05);
+    switch(mode)
+    {
+      case scan_in::Restart:
+        CHECK(r.g->scan_phase < 0.05);
+        break;
+      case scan_in::Continue:
+        CHECK(r.g->scan_phase > before);
+        break;
+      case scan_in::PerFile: {
+        // File 0 where its grains left it, file 2 from Position
+        const double at0 = r.g->file_scan[0];
+        CHECK(at0 == Catch::Approx(before).margin(0.03));
+        CHECK(r.g->file_scan[2] < 0.05);
+        r.run(0.1);
+        CHECK(r.g->file_scan[0] == at0);
+        CHECK(r.g->file_scan[2] == Catch::Approx(0.2).margin(0.04));
+        // File 0 again: on from where it was
+        r.g->inputs.sound_file.value = "0";
+        r.tick();
+        CHECK(r.g->file_scan[0] == Catch::Approx(at0).margin(0.04));
+        break;
+      }
+    }
   }
+}
+
+TEST_CASE("Scan in folder, Per file: a file's place moves only with its grains", "[scan][folder]")
+{
+  // 4 files in turn: each moves a quarter of the way Scan goes
+  Rig r;
+  Folder f{4};
+  f.into(*r.g, order::Alphabetical);
+  r.g->inputs.scan.value = 0.1f;
+  r.g->inputs.density.value = 20.f;
+  r.g->inputs.scan_folder.value = scan_in::PerFile;
+  r.run(2.);
+  double sum = 0.;
+  for(int k = 0; k < 4; k++)
+  {
+    CAPTURE(k);
+    CHECK(r.g->file_scan[k] == Catch::Approx(r.g->scan_travel / 4.).margin(0.01));
+    sum += r.g->file_scan[k];
+  }
+  CHECK(sum == Catch::Approx(r.g->scan_travel_at_grain).epsilon(1e-9));
+
+  // A file not ready: its place stays
+  Rig u;
+  Folder g{4};
+  g.status(1, halp::sound_status::loading);
+  g.into(*u.g, order::Alphabetical);
+  u.g->inputs.scan.value = 0.1f;
+  u.g->inputs.density.value = 20.f;
+  u.g->inputs.scan_folder.value = scan_in::PerFile;
+  u.run(1.);
+  CHECK(u.g->file_scan[1] == 0.);
+  CHECK(u.g->file_scan[0] > 0.01);
+
+  // The folder listed again with a file before the others: the places follow
+  // the files, by name
+  const std::vector<double> places(r.g->file_scan.begin(), r.g->file_scan.begin() + 4);
+  Folder more{5};
+  for(int k = 0; k < 4; k++)
+    more.names[k + 1] = f.names[k];
+  more.names[0] = "a new one.wav";
+  for(int k = 0; k < 5; k++)
+    more.views[k].name = more.names[k];
+  r.g->inputs.sounds.files = {more.views, "/folder", 1000};
+  r.g->relist_file_scans();
+  CHECK(r.g->file_scan[0] == 0.);
+  for(int k = 0; k < 4; k++)
+    CHECK(r.g->file_scan[k + 1] == places[k]);
+}
+
+TEST_CASE("Scan in folder, Per file: the play zone shows the shown file's place", "[scan][folder]")
+{
+  using G = Granola::Granola;
+  Rig r;
+  Folder f{4};
+  f.into(*r.g, order::Alphabetical);
+  r.g->inputs.scan.value = 0.1f;
+  r.g->inputs.density.value = 20.f;
+  r.g->inputs.scan_folder.value = scan_in::PerFile;
+  r.g->inputs.sound_file.value = "1";
+  int shown = -1;
+  r.g->send_message = [&](G::processor_to_ui m) {
+    if(auto* h = ossia::get_if<G::playheads>(&m.message); h && h->scanning)
+      shown = h->scan;
+  };
+  r.run(1.);
+  REQUIRE(shown >= 0);
+  CHECK(
+      shown / G::playheads::pos_scale
+      == Catch::Approx(r.g->scanned(r.g->inputs.pos + r.g->file_scan[1])).margin(0.01));
 }

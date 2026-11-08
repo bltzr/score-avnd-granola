@@ -146,7 +146,7 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
           in.sounds.value = rng() % 4 ? "/f" : "";
           in.source.value = decltype(in.source.value)(rng() % 2);
           // Past the last entry too, as a cable may send
-          in.order.value = decltype(in.order.value)(rng() % 8);
+          in.order.value = decltype(in.order.value)(rng() % 7);
           in.sound_file.value = std::to_string(int(rng() % 9) - 1);
           break;
         }
@@ -172,7 +172,7 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
             in.midi.midi_messages.push_back(
                 libremidi::message{{status, uint8_t(rng() % 128), uint8_t(rng() % 128)}, 0});
           }
-          in.midi_gate.value = rng() % 4 != 0;
+          in.note_pitch.value = rng() % 4 != 0;
           break;
         }
         case 6:
@@ -183,7 +183,7 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
         case 7:
           in.scan.value = any_value(rng) * 4.f;
           in.scan_mode.value = decltype(in.scan_mode.value)(rng() % 4);
-          in.scan_across.value = rng() % 2;
+          in.scan_folder.value = decltype(in.scan_folder.value)(rng() % 4);
           break;
         case 8:
           in.sample_start.value = any_value(rng);

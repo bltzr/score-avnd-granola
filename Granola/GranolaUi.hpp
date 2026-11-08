@@ -128,14 +128,6 @@ consteval halp::look small_slider_as(std::string_view name)
   l.size = halp::control_size::compact;
   return l;
 }
-// A slider of the region: its value while dragged or hovered, the waveform
-// shows it otherwise
-consteval halp::look region_slider_as(std::string_view name)
-{
-  auto l = small_slider_as(name);
-  l.value = halp::value_display::hover;
-  return l;
-}
 // A dropdown the section title already names
 inline constexpr halp::look bare_dropdown{
     .hide_label = true, .widget = halp::control_widget::combo};
@@ -740,13 +732,13 @@ struct Granola::ui
     halp_meta(layout, section)
     halp_meta(background, background_mid)
 
-    // Where the sound comes from, which one, the part of it that plays: one
-    // row, the labels above the controls, the cells at the top and left
+    // Where the sound comes from and which file: one row, the labels above
+    // the controls, the cells at the top and left
     struct source_t
     {
       halp_meta(layout, grid)
-      // The Source, the pages, Start, End, Wrap at end
-      halp_meta(columns, 5)
+      // The Source, then the file or the folder's
+      halp_meta(columns, 2)
       halp_meta(alignment, halp::alignments::left)
       halp_meta(spacing, 6)
       // The Source selector as a control of score: its label above it, from
@@ -806,19 +798,6 @@ struct Granola::ui
           halp::item<&ins::order, dropdown_as("Order")> order;
         } folder;
       } pages;
-      // The part of the sound that plays; also by the handles over the
-      // waveform
-      halp::item<&ins::sample_start, region_slider_as("Start")> sample_start;
-      halp::item<&ins::sample_end, region_slider_as("End")> sample_end;
-      // Grains reaching the end of the region go on from its start. A toggle
-      // has its label beside it: in the row of the controls, under the labels
-      struct
-      {
-        halp_meta(layout, vbox)
-        halp_meta(padding, 0)
-        halp::spacing labels{.width = 0, .height = 14};
-        halp::item<&ins::loopmode, halp::label_as("Wrap at end")> wrap;
-      } wrap;
     } source;
 
     halp::custom_multi_control<
@@ -838,33 +817,19 @@ struct Granola::ui
       halp_meta(name, "Play")
       halp_meta(layout, section)
       halp_meta(background, background_mid)
-      // What starts the grains, then the voices, then Scan: in columns as
-      // the other sections, the labels above the controls
+      // When grains come and how many at once
       struct
       {
         halp_meta(layout, grid)
-        halp_meta(columns, 3)
+        halp_meta(columns, 2)
         halp_meta(alignment, halp::alignments::left)
         halp::item<&ins::playing> playing;
         halp::item<&ins::trig> trigger;
-        halp::item<&ins::midi_gate, halp::label_as("MIDI")> midi;
-        halp::item<&ins::num_voices, halp::label_as("Voices")> voices;
-        halp::item<&ins::interp_type, dropdown_as("Interpolation")> interpolation;
-        halp::spacing none{.width = 0, .height = 0};
-        // Position moving by itself; with the folder, across its files or not
-        halp::item<&ins::scan, small_knob_as("Scan")> scan;
-        halp::item<&ins::scan_mode, dropdown_as("Scan mode")> scan_mode;
-        // Only for the folder's sounds
-        struct
-        {
-          halp_meta(layout, hbox)
-          static constexpr auto condition()
-          {
-            using source = std::decay_t<decltype(ins{}.source.value)>;
-            return halp::enabled_when<&ins::source, source::Folder>{};
-          }
-          halp::item<&ins::scan_across, halp::label_as("Across sounds")> scan_across;
-        } across;
+        halp::item<&ins::density, small_knob_as("Density")> density;
+        halp::item<&ins::dens_j, small_slider_as("Deviation")> dens_jitter;
+        halp::item<&ins::num_voices, halp::label_as("Max voices")> voices;
+        // Notes play grains at their pitch; the files they pick are Order's
+        halp::item<&ins::note_pitch> note_pitch;
       } controls;
     } play;
 
@@ -873,18 +838,40 @@ struct Granola::ui
       halp_meta(name, "Grain")
       halp_meta(layout, section)
       halp_meta(background, background_mid)
+      // Where in the sound grains read, how long, and how: Position and
+      // Duration, the region, then Scan, which moves Position, in a column
       struct
       {
         halp_meta(layout, grid)
-        halp_meta(columns, 2)
+        halp_meta(columns, 3)
         // Each column flush left: its items line up under each other
         halp_meta(alignment, halp::alignments::left)
         halp::item<&ins::pos, small_knob_as("Position")> position;
         halp::item<&ins::pos_j, small_slider_as("Deviation")> pos_jitter;
+        // Position moving by itself
+        halp::item<&ins::scan, small_knob_as("Scan")> scan;
         halp::item<&ins::dur, small_knob_as("Duration")> duration;
         halp::item<&ins::dur_j, small_slider_as("Deviation")> dur_jitter;
-        halp::item<&ins::density, small_knob_as("Density")> density;
-        halp::item<&ins::dens_j, small_slider_as("Deviation")> dens_jitter;
+        halp::item<&ins::scan_mode, dropdown_as("Scan mode")> scan_mode;
+        // The part of the sound grains read; also by the handles over the
+        // waveform
+        halp::item<&ins::sample_start, small_slider_as("Start")> sample_start;
+        halp::item<&ins::sample_end, small_slider_as("End")> sample_end;
+        // With the folder's files: only for them
+        struct
+        {
+          halp_meta(layout, hbox)
+          halp_meta(padding, 0)
+          halp_meta(alignment, halp::alignments::left)
+          static constexpr auto condition()
+          {
+            using source = std::decay_t<decltype(ins{}.source.value)>;
+            return halp::enabled_when<&ins::source, source::Folder>{};
+          }
+          halp::item<&ins::scan_folder, dropdown_as("Scan in folder")> scan_folder;
+        } scan_folder;
+        // Grains reaching the end of the region go on from its start
+        halp::item<&ins::loopmode, halp::label_as("Wrap at end")> wrap;
       } knobs;
     } grain;
 
@@ -904,6 +891,8 @@ struct Granola::ui
         // How many grains play backwards
         halp::item<&ins::reverse_chance, small_knob_as("Backwards")> backwards;
         halp::item<&ins::rate_j_semitones, halp::label_as("Semitones")> semitones;
+        // How the sound is read between its samples, at any speed
+        halp::item<&ins::interp_type, dropdown_as("Interpolation")> interpolation;
       } knobs;
     } pitch;
 

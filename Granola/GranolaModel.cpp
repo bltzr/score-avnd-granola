@@ -37,6 +37,15 @@ void Granola::prepare(setup info)
   block_gain.assign(max_block, 0.);
   if(shuffle_order.size() != std::size_t(max_shuffle))
     shuffle_order.assign(max_shuffle, 0);
+  if(file_scan.size() != std::size_t(max_scan_files))
+  {
+    file_scan.assign(max_scan_files, 0.);
+    file_scan_next.assign(max_scan_files, 0.);
+    file_scan_name.assign(max_scan_files, 0);
+    file_scan_name_next.assign(max_scan_files, 0);
+    file_scan_count = 0;
+    file_scan_generation = ~uint64_t(0);
+  }
   shuffle_n = 0;
   set_voice_count(inputs.num_voices);
 }
@@ -82,7 +91,65 @@ void Granola::reshuffle(int n) noexcept
     shuffle_b = (shuffle_b + 1) % uint64_t(n);
 }
 
-int Granola::next_in_order(int picked, int note) noexcept
+int Granola::file_of_note(int note) const noexcept
+{
+  const int n = (int)inputs.sounds.size();
+  if(n == 0)
+    return -1;
+  const int first = ((note - 60) % n + n) % n;
+  for(int k = 0; k < n; k++)
+    if(const int i = (first + k) % n; ready(i))
+      return i;
+  return -1;
+}
+
+int Granola::latest_note() const noexcept
+{
+  int note = -1;
+  uint64_t when = 0;
+  for(int n = 0; n < 128; n++)
+    if(const auto& v = midi_voices[n]; v.active && v.pressed >= when)
+    {
+      note = n;
+      when = v.pressed;
+    }
+  return note;
+}
+
+void Granola::relist_file_scans() noexcept
+{
+  const auto& sounds = inputs.sounds;
+  if(file_scan.empty() || sounds.generation() == file_scan_generation)
+    return;
+  file_scan_generation = sounds.generation();
+  // Each file's place, from the file of its name nearest to its index
+  const int n = std::min((int)sounds.size(), max_scan_files);
+  constexpr int near = 16;
+  for(int i = 0; i < n; i++)
+  {
+    const auto name = std::hash<std::string_view>{}(sounds[i].name);
+    file_scan_name_next[i] = name;
+    file_scan_next[i] = 0.;
+    for(int d = 0; d <= near; d++)
+    {
+      if(i + d < file_scan_count && file_scan_name[i + d] == name)
+      {
+        file_scan_next[i] = file_scan[i + d];
+        break;
+      }
+      if(d > 0 && i - d >= 0 && i - d < file_scan_count && file_scan_name[i - d] == name)
+      {
+        file_scan_next[i] = file_scan[i - d];
+        break;
+      }
+    }
+  }
+  std::swap(file_scan, file_scan_next);
+  std::swap(file_scan_name, file_scan_name_next);
+  file_scan_count = n;
+}
+
+int Granola::next_in_order(int picked) noexcept
 {
   using order = std::decay_t<decltype(inputs.order.value)>;
   const int n = (int)inputs.sounds.size();
@@ -92,6 +159,7 @@ int Granola::next_in_order(int picked, int note) noexcept
   switch(inputs.order.value)
   {
     case order::Single:
+    case order::ByNote: // with no note held
     default:
       return picked;
     case order::Random:
@@ -150,15 +218,6 @@ int Granola::next_in_order(int picked, int note) noexcept
       if(r >= 0)
         order_at = r;
       return r;
-    }
-    case order::ByNote: {
-      if(note < 0)
-        return picked;
-      const int first = ((note - 60) % n + n) % n;
-      for(int k = 0; k < n; k++)
-        if(const int i = (first + k) % n; ready(i))
-          return i;
-      return -1;
     }
   }
 }
@@ -276,8 +335,13 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
   auto& ph = ossia::get<playheads>(msg.message);
   ph.count = 0;
   ph.scanning = inputs.scan != 0.f;
+  // The place of the file shown, Per file
+  double at = scan_phase;
+  if(ui_shown_index >= 0 && file_scan_count > 0
+     && inputs.scan_folder.value == decltype(inputs.scan_folder.value)::PerFile)
+    at = file_scan[ui_shown_index % file_scan_count];
   ph.scan = ph.scanning
-                ? uint16_t(std::lround(scanned(inputs.pos + scan_phase) * playheads::pos_scale))
+                ? uint16_t(std::lround(scanned(inputs.pos + at) * playheads::pos_scale))
                 : 0;
   for(long i = 0; i < std::min<long>(inputs.num_voices, (long)grains.size()); i++)
   {
@@ -459,14 +523,15 @@ void Granola::notify_current_sound(int index, const GrainSource& cur) noexcept
 
 void Granola::read_midi() noexcept
 {
-  if(!inputs.midi_gate)
+  // Notes play grains, or pick files
+  if(!inputs.note_pitch && inputs.order.value != decltype(inputs.order.value)::ByNote)
   {
-    // Gate closed: every note off, none stuck
-    if(midi_active)
+    // Not listening: every note off, none stuck
+    if(midi_held)
     {
       for(auto& v : midi_voices)
         v.active = false;
-      midi_active = false;
+      midi_held = midi_active = false;
       midi_pending.clear();
     }
     return;
@@ -485,16 +550,21 @@ void Granola::read_midi() noexcept
       v.active = true;
       v.counter = 0;
       v.velocity = uint8_t(vel);
-      midi_active = true;
+      v.pressed = ++notes_pressed;
+      midi_held = true;
       midi_pending.set(note);
     }
     else if(type == message_type::NOTE_OFF || type == message_type::NOTE_ON)
     {
       midi_voices[note].active = false;
       midi_pending.reset(note);
-      midi_active = std::ranges::any_of(midi_voices, &MidiVoice::active);
+      midi_held = std::ranges::any_of(midi_voices, &MidiVoice::active);
     }
   }
+  // The notes' own grains only with Note pitch; else they may pick files
+  midi_active = inputs.note_pitch && midi_held;
+  if(!midi_active)
+    midi_pending.clear();
 }
 
 float Granola::deviate(float deviation) noexcept
@@ -601,9 +671,16 @@ Granola::tick_plan Granola::make_plan(const GrainSource& cur, int cur_index, boo
   // sound's speed. From Position again when it stops, when it starts
   // playing, and when the sound changes, unless it goes on across the
   // folder's sounds.
-  const bool new_sound = cur.data != scan_source && !(from_folder && inputs.scan_across);
-  if(new_sound || (inputs.playing && !scan_was_playing) || inputs.scan == 0.f)
+  using scan_folder = std::decay_t<decltype(inputs.scan_folder.value)>;
+  const bool new_sound = cur.data != scan_source
+                         && !(from_folder && inputs.scan_folder.value != scan_folder::Restart);
+  const bool restart = (inputs.playing && !scan_was_playing) || inputs.scan == 0.f;
+  if(new_sound || restart)
     scan_phase = 0.;
+  if(from_folder)
+    relist_file_scans();
+  if(restart && file_scan_count > 0)
+    std::fill_n(file_scan.begin(), file_scan_count, 0.);
   scan_source = cur.data;
   scan_was_playing = inputs.playing;
   p.scan_step = inputs.scan / (cur.frames * p.region_len);
@@ -625,14 +702,11 @@ Granola::tick_plan Granola::make_plan(const GrainSource& cur, int cur_index, boo
   };
   p.interval = interval_at(inputs.rate);
   // MIDI: each held note at its own pace, as its pitch sets the length of
-  // its grains; By MIDI note, where notes pick files, at Pitch
+  // its grains
   if(midi_active)
     for(int n = 0; n < 128; n++)
       if(midi_voices[n].active)
-        p.note_interval[n] = interval_at(
-            from_folder && inputs.order.value == decltype(inputs.order.value)::ByNote
-                ? (double)inputs.rate
-                : inputs.rate * note_ratio(n));
+        p.note_interval[n] = interval_at(inputs.rate * note_ratio(n));
 
   p.gain_step = 1. - std::exp(-1. / (0.005 * samplerate));
   return p;
@@ -696,14 +770,16 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
     gp.amp = std::pow(10., -std::abs(n01(rd)) * inputs.gain_j * 24. / 20.);
   // The note of a MIDI grain
   const int note = midi_active ? midi_pending.first() : -1;
-  const bool by_note
-      = p.from_folder && inputs.order.value == decltype(inputs.order.value)::ByNote;
   // A grain of the folder pins its file, which then outlives changes of the
-  // folder; Sound Order picks the file of each grain
+  // folder; Sound Order picks the file of each grain, By MIDI note its note,
+  // or the note pressed last of the held ones
   gp.source = p.cur;
+  int idx = -1;
   if(p.from_folder)
   {
-    const int idx = next_in_order(p.cur_index, note);
+    const bool by_note = inputs.order.value == decltype(inputs.order.value)::ByNote;
+    const int file_note = by_note && midi_held ? (note >= 0 ? note : latest_note()) : -1;
+    idx = file_note >= 0 ? file_of_note(file_note) : next_in_order(p.cur_index);
     if(idx >= 0)
     {
       const auto& snd = inputs.sounds[idx];
@@ -716,7 +792,7 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
     // The pitch of the note, from the current Pitch, so that glissandi take
     // effect at once
     midi_pending.reset(note);
-    gp.rate = grain_rate(by_note ? inputs.rate : inputs.rate * note_ratio(note));
+    gp.rate = grain_rate(inputs.rate * note_ratio(note));
     // Square-law velocity: perceptual gain, in the grain's level
     const double vel = midi_voices[note].velocity / 127.;
     gp.amp *= vel * vel;
@@ -730,7 +806,18 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
   // In the region, in fractions of it; not shorter than the shortest grain
   // of the file it reads, which also keeps the deviation from going under
   // zero, which Grain::set reads as the whole region
-  double pos = inputs.pos + scan_phase + deviate(inputs.pos_j);
+  // Scan in folder, Per file: the file's own place, which goes on by as far
+  // as Scan went since the grain before
+  double scan_at = scan_phase;
+  if(p.from_folder && idx >= 0 && file_scan_count > 0
+     && inputs.scan_folder.value == decltype(inputs.scan_folder.value)::PerFile)
+  {
+    double& place = file_scan[idx % file_scan_count];
+    place = wrap_scan(place + (scan_travel - scan_travel_at_grain), p.scan_end);
+    scan_at = place;
+  }
+  scan_travel_at_grain = scan_travel;
+  double pos = inputs.pos + scan_at + deviate(inputs.pos_j);
   double dur = (inputs.dur + deviate(inputs.dur_j)) * p.region_len;
   dur = std::max(dur, min_duration(gp.rate, gp.source.frames));
   // With Scan, as its mode goes on past the region's ends; else never
@@ -762,23 +849,25 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
   return true;
 }
 
-void Granola::advance_scan(const tick_plan& p) noexcept
+double Granola::wrap_scan(double phase, double scan_end) const noexcept
 {
-  scan_phase += p.scan_step;
   using mode = std::decay_t<decltype(inputs.scan_mode.value)>;
   switch(inputs.scan_mode.value)
   {
     case mode::Loop:
-      scan_phase -= p.scan_end * std::floor(scan_phase / p.scan_end);
-      break;
+      return phase - scan_end * std::floor(phase / scan_end);
     case mode::PingPong: // there and back
-      scan_phase -= 2. * p.scan_end * std::floor(scan_phase / (2. * p.scan_end));
-      break;
+      return phase - 2. * scan_end * std::floor(phase / (2. * scan_end));
     case mode::Straight: // stays at the end it reached
-      scan_phase
-          = std::clamp(scan_phase, -(double)inputs.pos, std::max(p.scan_end - inputs.pos, 0.));
-      break;
+    default:
+      return std::clamp(phase, -(double)inputs.pos, std::max(scan_end - inputs.pos, 0.));
   }
+}
+
+void Granola::advance_scan(const tick_plan& p) noexcept
+{
+  scan_phase = wrap_scan(scan_phase + p.scan_step, p.scan_end);
+  scan_travel += p.scan_step;
 }
 
 void Granola::advance_timing(const tick_plan& p, int s) noexcept
@@ -834,6 +923,7 @@ void Granola::operator()(tick t)
   int cur_index = -1;
   const GrainSource cur = current_source(from_folder, cur_index);
   notify_current_sound(cur_index, cur);
+  ui_shown_index = cur_index;
   // Nothing to play, e.g. a file of the folder being decoded; or not
   // prepared, its buffers not made
   if(!cur || scratch.empty() || free_from.size() != grains.size())
