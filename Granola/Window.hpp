@@ -21,7 +21,7 @@ struct window_shape
   enum kind : uint8_t
   {
     beta = 0,       // x^(a-1) (1-x)^(b-1)
-    cosine = 1,     // sin(pi x^ea)^eb
+    cosine = 1,     // sin(pi x^ex)^ey, peaking where beta does
     kumaraswamy = 2 // x^(a-1) (1-x^a)^(b-1)
   };
 
@@ -31,7 +31,7 @@ struct window_shape
   kind type{beta};
   double a{1.}, b{1.};
   // The logarithm of the peak (beta), or what scales to 1 (kumaraswamy);
-  // the two exponents (cosine)
+  // what moves the peak to beta's and the sharpness (cosine)
   double norm{0.};
   double ex{1.}, ey{1.};
 
@@ -72,10 +72,16 @@ struct window_shape
         w.norm = peak > 0. ? 1. / peak : 1.;
         break;
       }
-      case cosine:
-        w.ex = std::exp(w.a / 10.);
-        w.ey = std::exp(w.b / 10.);
+      case cosine: {
+        // Its peak, sin(pi / 2), at beta's mode: x^ex = 1/2 there. As sharp
+        // as a and b are above 1: flat at the bottom of the pad, a sine
+        // window around the default, narrower above
+        const double s = w.a + w.b - 2.;
+        const double mode = std::clamp(s > 0. ? (w.a - 1.) / s : 0.5, 0.01, 0.99);
+        w.ex = std::log(0.5) / std::log(mode);
+        w.ey = s / 4.;
         break;
+      }
     }
     return w;
   }
@@ -94,7 +100,7 @@ struct window_shape
         v = raw_kumaraswamy(phase) * norm;
         break;
       case cosine:
-        v = std::pow(std::sin(std::numbers::pi * std::pow(phase, ex)), ey);
+        v = ey > 0. ? std::pow(std::sin(std::numbers::pi * std::pow(phase, ex)), ey) : 1.;
         break;
     }
     return std::clamp(v, 0., 1.);
