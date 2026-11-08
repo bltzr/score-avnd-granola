@@ -733,8 +733,8 @@ TEST_CASE("The panel's Grain, Pitch and Output columns line up", "[app][ui]")
         if(m.panel->isAncestorOf(port))
           x[port->port().name()] = port->scenePos().x();
     const std::vector<std::vector<QString>> columns{
-        {"Continuous", "Density", "Max Voices"},
-        {"Trigger", "Density Deviation", "Note pitch"},
+        {"Continuous", "Density", "Max Voices", "On MIDI"},
+        {"Trigger", "Density Deviation"},
         {"Position", "Duration", "Sample Start", "Loop"},
         {"Position Deviation", "Duration Deviation", "Sample End"},
         {"Scan", "Scan Mode", "Scan in folder"},

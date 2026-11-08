@@ -828,9 +828,16 @@ struct Granola::ui
         halp::item<&ins::density, small_knob_as("Density")> density;
         halp::item<&ins::dens_j, small_slider_as("Deviation")> dens_jitter;
         halp::item<&ins::num_voices, halp::label_as("Max voices")> voices;
-        // Notes play grains at their pitch; the files they pick are Order's
-        halp::item<&ins::note_pitch> note_pitch;
       } controls;
+      // What MIDI notes do, the files they pick being Order's: under the
+      // others, as wide as its longest entry
+      struct
+      {
+        halp_meta(layout, hbox)
+        halp_meta(padding, 0)
+        halp_meta(alignment, halp::alignments::left)
+        halp::item<&ins::on_midi, dropdown_as("On MIDI")> on_midi;
+      } midi;
     } play;
 
     struct

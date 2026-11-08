@@ -172,7 +172,7 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
             in.midi.midi_messages.push_back(
                 libremidi::message{{status, uint8_t(rng() % 128), uint8_t(rng() % 128)}, 0});
           }
-          in.note_pitch.value = rng() % 4 != 0;
+          in.on_midi.value = decltype(in.on_midi.value)(rng() % 5);
           break;
         }
         case 6:

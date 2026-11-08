@@ -523,8 +523,19 @@ void Granola::notify_current_sound(int index, const GrainSource& cur) noexcept
 
 void Granola::read_midi() noexcept
 {
+  // The note Continuous and Trigger go on with once released: until a file
+  // is picked by hand, or Sound Order changes
+  const auto picked = std::hash<std::string_view>{}(inputs.sound_file.value);
+  if(picked != latch_picked || int(inputs.order.value) != latch_order)
+  {
+    latched_note = -1;
+    latch_picked = picked;
+    latch_order = int(inputs.order.value);
+  }
+
   // Notes play grains, or pick files
-  if(!inputs.note_pitch && inputs.order.value != decltype(inputs.order.value)::ByNote)
+  if(inputs.on_midi.value == decltype(inputs.on_midi.value)::Nothing
+     && inputs.order.value != decltype(inputs.order.value)::ByNote)
   {
     // Not listening: every note off, none stuck
     if(midi_held)
@@ -534,6 +545,7 @@ void Granola::read_midi() noexcept
       midi_held = midi_active = false;
       midi_pending.clear();
     }
+    latched_note = -1;
     return;
   }
   using libremidi::message_type;
@@ -553,16 +565,21 @@ void Granola::read_midi() noexcept
       v.pressed = ++notes_pressed;
       midi_held = true;
       midi_pending.set(note);
+      latched_note = note;
     }
     else if(type == message_type::NOTE_OFF || type == message_type::NOTE_ON)
     {
+      // The last one released: what played then goes on
+      const int in_effect = latest_note();
       midi_voices[note].active = false;
       midi_pending.reset(note);
       midi_held = std::ranges::any_of(midi_voices, &MidiVoice::active);
+      if(!midi_held && in_effect >= 0)
+        latched_note = in_effect;
     }
   }
   // The notes' own grains only with Note pitch; else they may pick files
-  midi_active = inputs.note_pitch && midi_held;
+  midi_active = notes_trigger() && midi_held;
   if(!midi_active)
     midi_pending.clear();
 }
@@ -619,6 +636,28 @@ float Granola::grain_rate(float base) noexcept
       = chance >= 1.f
         || (chance > 0.f && std::uniform_real_distribution<float>(0.f, 1.f)(rd) < chance);
   return backwards ? -rate : rate;
+}
+
+bool Granola::notes_trigger() const noexcept
+{
+  using on = std::decay_t<decltype(inputs.on_midi.value)>;
+  return inputs.on_midi.value == on::Trigger || inputs.on_midi.value == on::TriggerPitch;
+}
+
+float Granola::pitch_for(int note) const noexcept
+{
+  using on = std::decay_t<decltype(inputs.on_midi.value)>;
+  switch(inputs.on_midi.value)
+  {
+    case on::TriggerPitch:
+      return note >= 0 ? inputs.rate * note_ratio(note) : inputs.rate;
+    case on::SetPitch:
+      if(const int held = clock_note(); held >= 0)
+        return inputs.rate * note_ratio(held);
+      return inputs.rate;
+    default:
+      return inputs.rate;
+  }
 }
 
 double Granola::min_duration(double rate, double frames) const noexcept
@@ -700,13 +739,13 @@ Granola::tick_plan Granola::make_plan(const GrainSource& cur, int cur_index, boo
         = std::max((double)inputs.dur * p.region_len, min_duration(rate, frames));
     return frames * dur / std::abs(rate);
   };
-  p.interval = interval_at(inputs.rate);
+  p.interval = interval_at(pitch_for(-1));
   // MIDI: each held note at its own pace, as its pitch sets the length of
   // its grains
   if(midi_active)
     for(int n = 0; n < 128; n++)
       if(midi_voices[n].active)
-        p.note_interval[n] = interval_at(inputs.rate * note_ratio(n));
+        p.note_interval[n] = interval_at(pitch_for(n));
 
   p.gain_step = 1. - std::exp(-1. / (0.005 * samplerate));
   return p;
@@ -778,7 +817,7 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
   if(p.from_folder)
   {
     const bool by_note = inputs.order.value == decltype(inputs.order.value)::ByNote;
-    const int file_note = by_note && midi_held ? (note >= 0 ? note : latest_note()) : -1;
+    const int file_note = by_note ? (note >= 0 ? note : clock_note()) : -1;
     idx = file_note >= 0 ? file_of_note(file_note) : next_in_order(p.cur_index);
     if(idx >= 0)
     {
@@ -792,14 +831,14 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
     // The pitch of the note, from the current Pitch, so that glissandi take
     // effect at once
     midi_pending.reset(note);
-    gp.rate = grain_rate(inputs.rate * note_ratio(note));
+    gp.rate = grain_rate(pitch_for(note));
     // Square-law velocity: perceptual gain, in the grain's level
     const double vel = midi_voices[note].velocity / 127.;
     gp.amp *= vel * vel;
   }
   else
   {
-    gp.rate = grain_rate(inputs.rate);
+    gp.rate = grain_rate(pitch_for(-1));
     trigger = false;
   }
 

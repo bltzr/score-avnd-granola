@@ -613,7 +613,7 @@ TEST_CASE("The ports, by the names documents and presets find them by", "[ports]
       "Density", "Density Deviation", "Reverse Chance", "Gain", "Gain Deviation",
       "Window coefs", "Interpolation mode", "Window mode", "Loop",
       "Source Channels", "Channel Offset", "Max Voices", "Continuous", "Trigger",
-      "MIDI In", "Note pitch", "Source", "Sounds", "Sound in folder", "Sound Order",
+      "MIDI In", "On MIDI", "Source", "Sounds", "Sound in folder", "Sound Order",
       "Scan in folder", "Sample Start", "Sample End", "Output Channels", "Scan Mode"};
   std::vector<std::string_view> names;
   Granola::Granola g;
@@ -1088,15 +1088,16 @@ heard listen(Rig& r, Folder& f, int ticks)
   h.rates = grain_rates(r, 20);
   return h;
 }
-// A rig with a folder of 4 files, file 0 picked, Note pitch and By MIDI note
-// as asked
-std::unique_ptr<Rig> midi_rig(Folder& f, bool pitch, bool file, bool continuous)
+using on_midi = std::decay_t<decltype(Granola::Granola{}.inputs.on_midi.value)>;
+// A rig with a folder of 4 files, file 0 picked, On MIDI and By MIDI note as
+// asked
+std::unique_ptr<Rig> midi_rig(Folder& f, on_midi mode, bool by_note, bool continuous)
 {
   auto r = std::make_unique<Rig>(1.);
-  f.into(*r->g, file ? order::ByNote : order::Single);
+  f.into(*r->g, by_note ? order::ByNote : order::Single);
   auto& in = r->g->inputs;
   in.sound_file.value = "0";
-  in.note_pitch.value = pitch;
+  in.on_midi.value = mode;
   in.playing.value = continuous;
   in.density.value = 4.f;
   in.dur.value = 0.02f;
@@ -1110,82 +1111,147 @@ void press(Rig& r, int n, bool on)
   // The grains of before end
   r.run(0.1);
 }
+bool all_near(const std::vector<double>& v, double want)
+{
+  return !v.empty()
+         && std::ranges::all_of(v, [=](double x) { return std::abs(x - want) < 0.01; });
+}
 }
 
-TEST_CASE("MIDI: Note pitch and By MIDI note, each and both", "[midi][order]")
+TEST_CASE("On MIDI, with and without By MIDI note", "[midi][order]")
 {
   const double up2 = std::exp2(2. / 12.);
-  SECTION("Both: each note's grains at its pitch, from its file")
+  for(bool by_note : {false, true})
   {
-    Folder f{4};
-    auto r = midi_rig(f, true, true, false);
-    press(*r, 62, true);
-    const auto h = listen(*r, f, 40);
-    CHECK(h.files == std::set{2});
-    REQUIRE(!h.rates.empty());
-    for(double v : h.rates)
-      CHECK(v == Catch::Approx(up2).margin(0.01));
+    CAPTURE(by_note);
+    // Note 62: file 2 By MIDI note, else the picked file, 0
+    const std::set<int> its_file{by_note ? 2 : 0};
+    // Nothing: no grain of the notes, no pitch
+    {
+      INFO("Nothing: no grain of the notes, no pitch");
+      Folder f{4};
+      auto r = midi_rig(f, on_midi::Nothing, by_note, true);
+      press(*r, 62, true);
+      const auto h = listen(*r, f, 40);
+      CHECK(h.files == its_file);
+      CHECK(all_near(h.rates, 1.));
+      r->g->inputs.playing.value = false;
+      r->run(0.2);
+      const auto made = r->g->grains_made;
+      press(*r, 64, true);
+      r->run(0.3);
+      CHECK(r->g->grains_made == made);
+    }
+    // Trigger: grains while held, at Pitch
+    {
+      INFO("Trigger: grains while held, at Pitch");
+      Folder f{4};
+      auto r = midi_rig(f, on_midi::Trigger, by_note, false);
+      r->run(0.2);
+      CHECK(r->g->grains_made == 0);
+      press(*r, 62, true);
+      const auto h = listen(*r, f, 40);
+      CHECK(h.files == its_file);
+      CHECK(all_near(h.rates, 1.));
+      press(*r, 62, false);
+      const auto made = r->g->grains_made;
+      r->run(0.3);
+      CHECK(r->g->grains_made == made);
+    }
+    // Trigger and set pitch: grains while held, at the note's pitch
+    {
+      INFO("Trigger and set pitch: grains while held, at the note's pitch");
+      Folder f{4};
+      auto r = midi_rig(f, on_midi::TriggerPitch, by_note, false);
+      press(*r, 62, true);
+      const auto h = listen(*r, f, 40);
+      CHECK(h.files == its_file);
+      CHECK(all_near(h.rates, up2));
+      press(*r, 62, false);
+      const auto made = r->g->grains_made;
+      r->run(0.3);
+      CHECK(r->g->grains_made == made);
+    }
+    // Set pitch: Continuous's grains at the pitch of the note pressed last
+    {
+      INFO("Set pitch: Continuous's grains at the pitch of the note pressed last");
+      Folder f{4};
+      auto r = midi_rig(f, on_midi::SetPitch, by_note, true);
+      CHECK(all_near(listen(*r, f, 20).rates, 1.));
+      press(*r, 62, true);
+      auto h = listen(*r, f, 40);
+      CHECK(h.files == its_file);
+      CHECK(all_near(h.rates, up2));
+      press(*r, 67, true);
+      CHECK(all_near(listen(*r, f, 20).rates, std::exp2(7. / 12.)));
+      // Released: the one held before, then, none held, the last one still
+      press(*r, 67, false);
+      CHECK(all_near(listen(*r, f, 20).rates, up2));
+      press(*r, 62, false);
+      h = listen(*r, f, 40);
+      CHECK(h.files == its_file);
+      CHECK(all_near(h.rates, up2));
+      // No grain of the notes themselves
+      r->g->inputs.playing.value = false;
+      r->run(0.2);
+      const auto made = r->g->grains_made;
+      press(*r, 62, true);
+      r->run(0.3);
+      CHECK(r->g->grains_made == made);
+    }
   }
-  SECTION("Note pitch only: at its pitch, the file Sound Order picks")
-  {
-    Folder f{4};
-    auto r = midi_rig(f, true, false, false);
-    press(*r, 62, true);
-    const auto h = listen(*r, f, 40);
-    CHECK(h.files == std::set{0});
-    REQUIRE(!h.rates.empty());
-    for(double v : h.rates)
-      CHECK(v == Catch::Approx(up2).margin(0.01));
-  }
-  SECTION("By MIDI note only: Continuous plays the file of the note pressed last")
-  {
-    Folder f{4};
-    auto r = midi_rig(f, false, true, true);
-    press(*r, 62, true);
-    auto h = listen(*r, f, 40);
-    CHECK(h.files == std::set{2});
-    for(double v : h.rates)
-      CHECK(v == Catch::Approx(1.).margin(0.01));
-    press(*r, 63, true);
-    CHECK(listen(*r, f, 40).files == std::set{3});
-    // Released: the one held before
-    press(*r, 63, false);
-    CHECK(listen(*r, f, 40).files == std::set{2});
-    // None held: the picked file
-    press(*r, 62, false);
-    CHECK(listen(*r, f, 40).files == std::set{0});
-    // Without Continuous, the notes make no grain of their own
-    r->g->inputs.playing.value = false;
-    r->run(0.2);
-    const auto made = r->g->grains_made;
-    press(*r, 61, true);
-    r->run(0.3);
-    CHECK(r->g->grains_made == made);
-    // Trigger: a grain of the note's file
-    r->g->inputs.trig.value.emplace();
-    r->tick();
-    r->g->inputs.trig.value.reset();
-    CHECK(r->g->grains_made == made + 1);
-    for(auto& gr : r->g->grains)
-      if(gr.m_active)
-        CHECK(f.index_of(gr.m_source.data) == 1);
-  }
-  SECTION("Neither: MIDI changes nothing")
-  {
-    Folder f{4};
-    auto r = midi_rig(f, false, false, true);
-    press(*r, 62, true);
-    const auto h = listen(*r, f, 40);
-    CHECK(h.files == std::set{0});
-    for(double v : h.rates)
-      CHECK(v == Catch::Approx(1.).margin(0.01));
-    r->g->inputs.playing.value = false;
-    r->run(0.2);
-    const auto made = r->g->grains_made;
-    press(*r, 64, true);
-    r->run(0.3);
-    CHECK(r->g->grains_made == made);
-  }
+}
+
+TEST_CASE("By MIDI note and Set pitch: the note goes on once released, until reset", "[midi][order]")
+{
+  Folder f{4};
+  auto r = midi_rig(f, on_midi::SetPitch, true, true);
+  // Note 50: file 2 ((50 - 60) mod 4), a minor seventh down
+  const double down10 = std::exp2(-10. / 12.);
+  press(*r, 50, true);
+  press(*r, 50, false);
+  auto h = listen(*r, f, 40);
+  CHECK(h.files == std::set{2});
+  CHECK(all_near(h.rates, down10));
+  // Another note replaces it
+  press(*r, 61, true);
+  press(*r, 61, false);
+  h = listen(*r, f, 40);
+  CHECK(h.files == std::set{1});
+  CHECK(all_near(h.rates, std::exp2(1. / 12.)));
+  // Stopping and starting keep it
+  r->g->inputs.playing.value = false;
+  r->run(0.2);
+  r->g->inputs.playing.value = true;
+  r->g->inputs.playing.update(*r->g);
+  CHECK(listen(*r, f, 40).files == std::set{1});
+  // A file picked by hand ends it
+  r->g->inputs.sound_file.value = "3";
+  r->run(0.1); // the grains of before end
+  h = listen(*r, f, 40);
+  CHECK(h.files == std::set{3});
+  CHECK(all_near(h.rates, 1.));
+  // As does another Sound Order
+  press(*r, 62, true);
+  press(*r, 62, false);
+  CHECK(listen(*r, f, 40).files == std::set{2});
+  r->g->inputs.order.value = order::Single;
+  r->tick();
+  r->g->inputs.order.value = order::ByNote;
+  r->run(0.1);
+  h = listen(*r, f, 40);
+  CHECK(h.files == std::set{3});
+  CHECK(all_near(h.rates, 1.));
+
+  // The notes playing their own grains: their own file while they play
+  Folder g{4};
+  auto t = midi_rig(g, on_midi::TriggerPitch, true, false);
+  press(*t, 61, true);
+  CHECK(listen(*t, g, 40).files == std::set{1});
+  press(*t, 61, false);
+  const auto made = t->g->grains_made;
+  t->run(0.3);
+  CHECK(t->g->grains_made == made);
 }
 
 TEST_CASE("Sound Order: the grains read the files in order", "[order]")
