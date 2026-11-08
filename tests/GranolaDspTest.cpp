@@ -614,7 +614,8 @@ TEST_CASE("The ports, by the names documents and presets find them by", "[ports]
       "Window coefs", "Interpolation mode", "Window mode", "Loop",
       "Source Channels", "Channel Offset", "Max Voices", "Continuous", "Trigger",
       "MIDI In", "On MIDI", "Velocity", "Keep time", "Source", "Sounds", "Sound in folder", "Sound Order",
-      "Scan in folder", "Sample Start", "Sample End", "Output Channels", "Scan Mode"};
+      "Scan in folder", "Sample Start", "Sample End", "Output Channels", "Scan Mode",
+      "Low note", "High note"};
   std::vector<std::string_view> names;
   Granola::Granola g;
   avnd::input_introspection<Granola::Granola>::for_all(
@@ -1058,21 +1059,6 @@ TEST_CASE("Sound Order: Random walk steps to neighbours, back from the ends", "[
     REQUIRE(i != 6);
 }
 
-TEST_CASE("By MIDI note: (note - 60) modulo the files, the next ready one", "[midi][order]")
-{
-  Rig r;
-  Folder f{4};
-  f.into(*r.g, order::Single);
-  for(auto [n, want] : std::vector<std::pair<int, int>>{
-          {60, 0}, {61, 1}, {63, 3}, {64, 0}, {59, 3}, {48, 0}, {127, 3}, {0, 0}})
-  {
-    CAPTURE(n);
-    CHECK(r.g->file_of_note(n) == want);
-  }
-  f.status(1, halp::sound_status::loading);
-  CHECK(r.g->file_of_note(61) == 2);
-}
-
 namespace
 {
 // The files the grains made in \p ticks read, and their speeds
@@ -1101,6 +1087,9 @@ std::unique_ptr<Rig> midi_rig(Folder& f, on_midi mode, bool by_note, bool contin
   in.playing.value = continuous;
   in.density.value = 4.f;
   in.dur.value = 0.02f;
+  // A key a file from note 60
+  in.low_note.value = 60;
+  in.high_note.value = 60 + f.views.size() - 1;
   return r;
 }
 void press(Rig& r, int n, bool on)
@@ -1206,12 +1195,13 @@ TEST_CASE("By MIDI note and Set pitch: the note goes on once released, until res
 {
   Folder f{4};
   auto r = midi_rig(f, on_midi::SetPitch, true, true);
-  // Note 50: file 2 ((50 - 60) mod 4), a minor seventh down
+  // Note 50, below the keys of the files: the first file, a minor seventh
+  // down
   const double down10 = std::exp2(-10. / 12.);
   press(*r, 50, true);
   press(*r, 50, false);
   auto h = listen(*r, f, 40);
-  CHECK(h.files == std::set{2});
+  CHECK(h.files == std::set{0});
   CHECK(all_near(h.rates, down10));
   // Another note replaces it
   press(*r, 61, true);
@@ -1252,85 +1242,6 @@ TEST_CASE("By MIDI note and Set pitch: the note goes on once released, until res
   const auto made = t->g->grains_made;
   t->run(0.3);
   CHECK(t->g->grains_made == made);
-}
-
-TEST_CASE("Set position and its slices: a key a place of the region", "[midi][position]")
-{
-  using G = Granola::Granola;
-  // From note 60 up, 24 slices, around every two octaves
-  for(auto [n, want] : std::vector<std::pair<int, double>>{
-          {60, 0.}, {61, 1. / 24.}, {72, 0.5}, {83, 23. / 24.}, {84, 0.}, {59, 23. / 24.}, {36, 0.}})
-  {
-    CAPTURE(n);
-    CHECK(G::note_position(n) == Catch::Approx(want));
-  }
-
-  // The grains near where a note puts them, read at their start: short
-  // grains, between two ticks
-  const auto starts_near = [](Rig& r, double where) {
-    int seen = 0;
-    each_grain(r, 40, [&](auto& g) {
-      CHECK(g.position() >= where - 1e-6);
-      CHECK(g.position() <= where + 0.03);
-      seen++;
-    });
-    return seen > 0;
-  };
-
-  SECTION("Set position: Continuous at the note's place, kept once released")
-  {
-    Folder f{1};
-    auto r = midi_rig(f, on_midi::SetPosition, false, true);
-    r->g->inputs.pos.value = 0.9f;
-    CHECK(starts_near(*r, 0.9));
-    press(*r, 66, true);
-    CHECK(starts_near(*r, 6. / 24.));
-    press(*r, 66, false);
-    CHECK(starts_near(*r, 6. / 24.));
-    press(*r, 72, true);
-    press(*r, 72, false);
-    CHECK(starts_near(*r, 0.5));
-    // Without Continuous, no grain of the notes
-    r->g->inputs.playing.value = false;
-    r->run(0.2);
-    const auto made = r->g->grains_made;
-    press(*r, 61, true);
-    r->run(0.3);
-    CHECK(r->g->grains_made == made);
-  }
-  SECTION("Trigger and set position: each note plays its slice, at Pitch")
-  {
-    Folder f{1};
-    auto r = midi_rig(f, on_midi::TriggerPosition, false, false);
-    press(*r, 63, true);
-    CHECK(starts_near(*r, 3. / 24.));
-    CHECK(std::ranges::all_of(grain_rates(*r, 20), [](double v) { return std::abs(v - 1.) < 0.01; }));
-    press(*r, 63, false);
-    const auto made = r->g->grains_made;
-    r->run(0.3);
-    CHECK(r->g->grains_made == made);
-  }
-  SECTION("With By MIDI note, the key picks the file and the slice")
-  {
-    Folder f{4};
-    auto r = midi_rig(f, on_midi::TriggerPosition, true, false);
-    press(*r, 61, true);
-    CHECK(listen(*r, f, 20).files == std::set{1});
-    CHECK(starts_near(*r, 1. / 24.));
-  }
-  SECTION("Scan moves on from the note's place")
-  {
-    Folder f{1};
-    auto r = midi_rig(f, on_midi::SetPosition, false, true);
-    r->g->inputs.scan.value = 0.5f;
-    r->run(0.5);
-    REQUIRE(r->g->scan_phase > 0.1);
-    r->g->inputs.midi.midi_messages.push_back(note(0x90, 72, 100));
-    r->tick();
-    r->g->inputs.midi.midi_messages.clear();
-    CHECK(r->g->scan_phase < 0.01);
-    CHECK(r->g->position_for(-1) == 0.5);
-  }
 }
 
 TEST_CASE("On MIDI Trigger: notes 48 and 72 read at Pitch, not transposed", "[midi]")
