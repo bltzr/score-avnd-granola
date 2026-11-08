@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <bit>
 #include <vector>
 //#include "buffer_proxy.hpp"
@@ -52,6 +53,8 @@ struct GranuGrain
 
   boost::container::static_vector<double, 2> m_shape;
   boost::container::static_vector<double, NCHAN> m_chan_amp;
+  // The level of each output channel, for Stereo Spread
+  std::array<float, NCHAN> m_pan{1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
 
   boost::dynamic_bitset<> m_window_update;
   boost::container::vector<double> m_window;
