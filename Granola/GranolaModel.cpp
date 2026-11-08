@@ -86,10 +86,11 @@ void Granola::set_voice_count(int n)
   if(grains.size() < std::size_t(max_voices))
     grains.resize(max_voices);
 
-  // The voices past the count stop
+  // The grains of the voices past the count fade out in 2 ms: no click
   n = std::clamp(n, 0, max_voices);
+  const long fade = std::max(long(0.002 * samplerate), 1L);
   for(std::size_t i = n; i < grains.size(); i++)
-    grains[i].reset();
+    grains[i].release(fade);
 }
 
 void Granola::clear()
@@ -234,11 +235,15 @@ void Granola::operator()(tick t)
 
   // A changed Sound file is freed once replaced: the grains still reading it
   // stop. The grains of the folder pin their file and play on.
-  const std::string_view snd_path = inputs.sound.soundfile.filename;
-  const std::size_t snd_path_hash = std::hash<std::string_view>{}(snd_path);
-  if(snd_path_hash != last_sound_path)
+  // By its data rather than its name: the same file loaded again is
+  // another one.
+  const GrainSource sound{
+      inputs.sound.soundfile.data, (long)inputs.sound.soundfile.channels,
+      (double)inputs.sound.soundfile.frames};
+  if(sound.data != last_sound.data || sound.frames != last_sound.frames
+     || sound.channels != last_sound.channels)
   {
-    last_sound_path = snd_path_hash;
+    last_sound = sound;
     for(auto& grain : grains)
       if(!grain.m_pin)
         grain.reset();
@@ -314,16 +319,6 @@ void Granola::operator()(tick t)
     outputs.audio.request_channels(wanted_channels);
   const int out_channels = std::min(wanted_channels, live_out_channels);
 
-  boost::container::static_vector<double, NCHAN> ampvec(n_channels, 1.);
-  for(int i = 0; i < n_channels; i++)
-  {
-    // ampvec[i] = 1.0f; useDefaultAmp ? 1.0f : amps[i]; // add this when we want to use amp vectors
-    // amps[i][j] if we use vectors from an audio port (as in granubuf_mc)
-    // also move below in for (int j = 0; j < t.frames; j++)
-
-    maxAmp = ampvec[i] > maxAmp ? ampvec[i] : maxAmp;
-  }
-
   // The window of the grains made in this tick, and its table, found when a
   // grain is made
   const auto window = window_shape::from_pad(
@@ -357,20 +352,20 @@ void Granola::operator()(tick t)
       const uint8_t note   = msg.bytes[1] & 0x7F;
       const uint8_t vel    = msg.bytes[2] & 0x7F;
 
-      if(status == 0x90 && vel > 0) // note on
+      if(status == 0x90 && vel > 0) // note on: its first grain at once
       {
         auto& v = midi_voices[note];
         v.active = true;
-        v.trigger_counter = 0;
+        v.counter = 0;
         v.velocity = vel;
         midi_active = true;
+        midi_pending.set(note);
       }
       else if(status == 0x80 || (status == 0x90 && vel == 0)) // note off
       {
         midi_voices[note].active = false;
-        midi_active = false;
-        for(const auto& v : midi_voices)
-          if(v.active) { midi_active = true; break; }
+        midi_pending.reset(note);
+        midi_active = std::ranges::any_of(midi_voices, &MidiVoice::active);
       }
     }
   }
@@ -379,7 +374,7 @@ void Granola::operator()(tick t)
     // Gate closed — kill all active voices to avoid stuck notes
     for(auto& v : midi_voices) v.active = false;
     midi_active = false;
-    midi_pending_voice = -1;
+    midi_pending.clear();
   }
 
   // A Jitter j spreads its control as N(0, j / 4): see the inputs
@@ -388,20 +383,22 @@ void Granola::operator()(tick t)
     return jitter > 0.f ? std::normal_distribution<float>(0.f, 0.25f)(rd) * jitter : 0.f;
   };
   // Relative, and never below 0: a negative density would spawn a grain at
-  // every sample
-  const auto jittered_density = [&] {
-    return inputs.density * std::max(1. + spread(inputs.dens_j), 0.);
+  // every sample. Drawn for each grain, applied to the current Density.
+  const auto draw_density_factor = [&] {
+    density_factor = std::max(1. + spread(inputs.dens_j), 0.);
   };
-  double density = jittered_density();
 
-  // Pitch Jitter, in semitones (6 a deviation at 1) or added to the pitch.
+  // Pitch Deviation, in semitones (6 a deviation at 1) or added to the
+  // pitch, then four octaves under it at the lowest: else a grain could read
+  // at about no speed, last for minutes and keep a voice; backwards, only by
+  // Reverse.
   // Reverse flips the whole rate, not only its jitter, and Reverse Chance
   // flips some grains.
   const auto jittered_rate = [&](float base) {
     // Whole semitones: notes of a scale rather than a detuned smear
     const float rate = inputs.rate_j_semitones
                            ? base * std::exp2(std::round(spread(inputs.rate_j) * 24.f) / 12.f)
-                           : base + spread(inputs.rate_j);
+                           : std::max(base + spread(inputs.rate_j), base / 16.f);
     bool backwards = inputs.reverse;
     if(inputs.reverse_chance > 0.f
        && std::uniform_real_distribution<float>(0.f, 1.f)(rd) < inputs.reverse_chance)
@@ -429,28 +426,47 @@ void Granola::operator()(tick t)
   const double scan_step
       = cur.frames > 0 ? inputs.scan / (cur.frames * region_len) : 0.;
 
-  // The shortest grain, as a fraction of the sound at a given pitch: a time,
-  // not a part of the file, so that long files still give short grains. Two
-  // samples of the file at the least.
+  // In random folder mode, the length of the file the last grain read: the
+  // next grain comes as that one's length and Density say, not as the
+  // length of the file shown
+  const double interval_frames = from_folder && inputs.random && last_spawn_frames > 0.
+                                     ? last_spawn_frames
+                                     : cur.frames;
+
+  // The shortest grain, as a fraction of a sound of \p frames at a given
+  // pitch: a time, not a part of the file, so that long files still give
+  // short grains. Two samples of the file at the least.
   const double min_grain_samples = min_grain_seconds * samplerate;
-  const auto min_dur = [&](double rate) {
-    return std::max(min_grain_samples * std::abs(rate), 2.) / cur.frames;
+  const auto min_dur = [&](double rate, double frames) {
+    return std::max(min_grain_samples * std::abs(rate), 2.) / frames;
   };
 
-  // Duration for the spawn timing, clamped up to the shortest grain: else a
-  // Duration ~= 0 (stale or automated) drops the spawn interval to 1 sample and
-  // packs grains back-to-back up to the voice cap, and Density stops meaning
-  // anything.
-  const double eff_dur
-      = std::max((double)inputs.dur * region_len, min_dur(inputs.rate));
+  // Samples between grains at a pitch, but for Density: the length of a
+  // grain, at least the shortest one, else a Duration ~= 0 (stale or
+  // automated) would pack grains back-to-back up to the voice cap
+  const auto interval_at = [&](double rate) {
+    const double dur = std::max(
+        (double)inputs.dur * region_len, min_dur(rate, interval_frames));
+    return interval_frames * dur / std::abs(rate);
+  };
+  const double interval = interval_at(inputs.rate);
 
-  if (inputs.trig ) {
+  // MIDI: each held note at its own pace, as its pitch sets the length of
+  // its grains
+  std::array<double, 128> note_interval;
+  const auto note_ratio = [](int note) { return std::exp2((note - 60) / 12.f); };
+  if(midi_active)
+    for(int n = 0; n < 128; n++)
+      if(midi_voices[n].active)
+        note_interval[n] = interval_at(inputs.rate * note_ratio(n));
+
+  if(inputs.trig)
     trigger = true;
-    /*trigger_counter = inputs.sound.frames() * inputs.dur
-               / (density * ((inputs.rate < 0) ?
-                     -inputs.rate : inputs.rate));
-    //qDebug() << " trigger ! " ;*/
-  }
+
+  // Gain as heard follows the control in about 5 ms: no zipper noise
+  if(gain_now < 0.)
+    gain_now = inputs.gain;
+  const double gain_step = 1. - std::exp(-1. / (0.005 * samplerate));
 
   const double scan_end = scan_last();
   for(int k = 0; k < t.frames; k++)
@@ -473,35 +489,27 @@ void Granola::operator()(tick t)
           break;
       }
     }
+    gain_now += (inputs.gain - gain_now) * gain_step;
 
     alloccheck = false;
-    maxAmp = 1;
     busyCount = 0;
 
-    //qDebug() << " trigger counter " << trigger_counter;
-
     for(int i = 0; i < live_out_channels; i++)
-    {
       outputs.audio.samples[i][k] = 0.;
-    }
 
-    for(long i = 0; i < voices; i++)
+    // The voices past Max Voices only fade out: no grain is made in them
+    for(long i = 0; i < (long)grains.size(); i++)
     {
-      const bool should_spawn = midi_active ? (midi_pending_voice >= 0)
-                                            : trigger;
-      if(!alloccheck && should_spawn
-         && busyCount < voices && maxAmp > 0.
+      const bool should_spawn = midi_active ? midi_pending.any() : trigger;
+      if(i < voices && !alloccheck && should_spawn && busyCount < voices
          && inputs.dur != 0. && inputs.rate != 0.)
       {
         if(!grains[i].m_active)
         {
-          // In the region: fractions of it
-          float pos = inputs.pos + float(scan_phase) + spread(inputs.pos_j);
-          float dur = (inputs.dur + spread(inputs.dur_j)) * region_len;
           float rate;
-          boost::container::static_vector<double, NCHAN> spawn_ampvec = ampvec;
-          // Gain jitter: some grains quieter, in decibels, down to -24 dB a
-          // deviation at 1. Never louder, which would clip: and the level
+          boost::container::static_vector<double, NCHAN> spawn_ampvec(n_channels, 1.);
+          // Gain Deviation: some grains quieter, in decibels, down to -24 dB
+          // a deviation at 1. Never louder, which would clip: and the level
           // of many grains around Gain would average out.
           if(inputs.gain_j > 0.f)
           {
@@ -527,22 +535,16 @@ void Granola::operator()(tick t)
           }
           if(midi_active)
           {
-            // Recompute pitch from current inputs.rate so glissandi take effect immediately
-            float base = inputs.rate * std::pow(2.f, (midi_pending_voice - 60) / 12.f);
-            // Reverse flips the whole rate, not only its jitter
-            rate = jittered_rate(base);
+            // The pitch of the note, from the current Pitch, so that
+            // glissandi take effect at once
+            const int note = midi_pending.first();
+            midi_pending.reset(note);
+            rate = jittered_rate(inputs.rate * note_ratio(note));
 
-            // Square-law velocity → perceptual gain, baked into the grain amplitude
-            const float vel_gain = std::pow(midi_voices[midi_pending_voice].velocity / 127.f, 2.f);
+            // Square-law velocity: perceptual gain, in the grain's level
+            const float vel = midi_voices[note].velocity / 127.f;
             for(auto& a : spawn_ampvec)
-              a *= vel_gain;
-
-            // advance to the next active voice
-            ++midi_pending_voice;
-            while(midi_pending_voice < 128 && !midi_voices[midi_pending_voice].active)
-              ++midi_pending_voice;
-            if(midi_pending_voice >= 128)
-              midi_pending_voice = -1;
+              a *= vel * vel;
           }
           else
           {
@@ -550,14 +552,15 @@ void Granola::operator()(tick t)
             trigger = false;
           }
 
-          // Not shorter than the shortest grain: this also keeps the jitter
-          // from going under zero, which GranuGrain::set reads as the whole
-          // file.
-          dur = std::max(dur, float(min_dur(rate)));
+          // In the region, in fractions of it; not shorter than the shortest
+          // grain of the file it reads, which also keeps the deviation from
+          // going under zero, which GranuGrain::set reads as the whole file
+          float pos = inputs.pos + float(scan_phase) + spread(inputs.pos_j);
+          float dur = (inputs.dur + spread(inputs.dur_j)) * region_len;
+          dur = std::max(dur, float(min_dur(rate, spawn_src.frames)));
 
-          // Past the end with Scan: around again
-          // In the region: with Scan, as its mode goes on past the ends;
-          // else never outside of it
+          // With Scan, as its mode goes on past the region's ends; else
+          // never outside of it
           pos = inputs.scan != 0.f ? scanned(pos) : std::clamp(pos, 0.f, 1.f);
           pos = float(region_lo + pos * region_len);
           if(!table_found)
@@ -569,9 +572,11 @@ void Granola::operator()(tick t)
               window, table, spawn_ampvec, spawn_src, std::move(spawn_pin),
               inputs.loopmode, ch_offset, n_channels, region_lo,
               region_lo + region_len);
+          last_spawn_frames = spawn_src.frames;
+          grains_made++;
+          draw_density_factor();
 
-          // Spread: a place x among the output channels, between two of
-          // them; Spread s mixes it with all the channels alike, as at 0
+          // Spread: a place among the output channels
           const int places = out_channels;
           auto& pan = grains[i].m_pan;
           pan = {};
@@ -585,11 +590,10 @@ void Granola::operator()(tick t)
             const float x = std::clamp(u - 0.5f, 0.f, float(places - 1));
             const int a = std::min(int(x), places - 2);
             const float t = x - a;
-            // Between a and a + 1: 1 at the centre, as the channels are now
-            constexpr float sqrt2 = std::numbers::sqrt2_v<float>;
+            // Between a and a + 1 at the same power wherever it is
             constexpr float half_pi = std::numbers::pi_v<float> / 2.f;
-            float wa = std::min(1.f, sqrt2 * std::cos(t * half_pi));
-            float wb = std::min(1.f, sqrt2 * std::sin(t * half_pi));
+            float wa = std::cos(t * half_pi);
+            float wb = std::sin(t * half_pi);
             // Past 1, towards the loudspeaker alone, which is a or a + 1
             if(const float one = sp - 1.f; one > 0.f)
             {
@@ -606,62 +610,62 @@ void Granola::operator()(tick t)
         }
       }
 
-       if(grains[i].m_active)
+      if(grains[i].m_active)
       {
-
         std::span<double> outSamps{
             grains[i].incr((long)inputs.interp_type.value)};
 
-        // The sound's channels in turn, in every output alike, then the
-        // grain's place among them
+        // The sound's channels in turn, in every output alike; then the
+        // grain at its place among them, all of its channels: none is lost
+        // when a grain is at one side
         const int read = std::max((int)outSamps.size(), 1);
         const auto& pan = grains[i].m_pan;
-        if(const double all = inputs.gain * pan.all; all != 0.)
+        if(const double all = gain_now * pan.all; all != 0.)
           for(int j = 0; j < out_channels; j++)
             outputs.audio.samples[j][k] += outSamps[j % read] * all;
         if(pan.a >= 0 && pan.a + 1 < out_channels)
         {
-          const int a = pan.a, b = pan.a + 1;
-          outputs.audio.samples[a][k] += outSamps[a % read] * inputs.gain * pan.at_a;
-          outputs.audio.samples[b][k] += outSamps[b % read] * inputs.gain * pan.at_b;
+          double mono = 0.;
+          for(int c = 0; c < read; c++)
+            mono += outSamps[c];
+          mono *= gain_now / read;
+          outputs.audio.samples[pan.a][k] += mono * pan.at_a;
+          outputs.audio.samples[pan.a + 1][k] += mono * pan.at_b;
         }
 
         busyCount++;
       }
-
     }
 
+    const double density = inputs.density * density_factor;
     if(midi_active)
     {
-      // One shared trigger fires all active notes simultaneously.
-      // Grains are spawned one per sample over consecutive samples (via
-      // midi_pending_voice), so a chord of N notes costs N samples to fully spawn.
-      if(trigger_counter
-         >= std::max(cur.frames * eff_dur / (density * inputs.rate), 1.0))
+      // Each held note when its interval has passed, keeping the fraction of
+      // a sample past it
+      for(int n = 0; n < 128; n++)
       {
-        // start scanning from the first active voice
-        midi_pending_voice = 0;
-        while(midi_pending_voice < 128 && !midi_voices[midi_pending_voice].active)
-          ++midi_pending_voice;
-        if(midi_pending_voice >= 128)
-          midi_pending_voice = -1;
-        trigger_counter = 0;
-        density = jittered_density();
+        auto& v = midi_voices[n];
+        if(!v.active)
+          continue;
+        const double every = note_interval[n] / density;
+        if(v.counter >= every)
+        {
+          midi_pending.set(n);
+          v.counter = v.counter - every < every ? v.counter - every : 0.;
+        }
+        v.counter += 1.;
       }
-      ++trigger_counter;
     }
     else if(inputs.playing)
     {
-      if(trigger_counter
-         >= std::max(cur.frames * eff_dur / (density * inputs.rate), 1.0))
+      const double every = interval / density;
+      if(trigger_counter >= every)
       {
         trigger = true;
-        trigger_counter = 0;
-        density = jittered_density();
+        trigger_counter = trigger_counter - every < every ? trigger_counter - every : 0.;
       }
-      ++trigger_counter;
+      trigger_counter += 1.;
     }
-
   }
 
   outputs.active_grains = busyCount;

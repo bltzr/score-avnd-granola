@@ -21,6 +21,7 @@
 
 void GranuGrain::reset()
 {
+  m_release = m_release_left = 0;
   m_active = false;
   m_source = {};
   // Releasing a pin never frees anything: the host does, later
@@ -185,6 +186,8 @@ GranuGrain::incr(const long interpType)
 
   // printf("incr_src_channels %ld\n", nchans);
 
+  // Faded out when released before its end
+  const double fade = m_release > 0 ? double(m_release_left) / m_release : 1.;
   const double win = window(m_phase_counter);
   m_last_win = win;
 
@@ -221,7 +224,7 @@ GranuGrain::incr(const long interpType)
           const double upperSamp = std::ceil(_sampIdx);
           const double upperVal
               = loop ? bufferData[(long)wrapInRegion(upperSamp)]
-                     : ((upperSamp < m_buf_len) ? bufferData[(long)upperSamp] : 0.0);
+                     : ((upperSamp <= m_buf_len) ? bufferData[(long)upperSamp] : 0.0);
 
           const long lsamp = lowerSamp;
           _playSamp = linear_interp(bufferData[lsamp], upperVal, _sampIdx - lowerSamp);
@@ -246,8 +249,9 @@ GranuGrain::incr(const long interpType)
           {
             a1 = lsamp - 1 < 0 ? 0 : bufferData[(lsamp - 1)];
             b = bufferData[lsamp];
-            c = (lsamp + 1) >= m_buf_len ? 0 : bufferData[(lsamp + 1)];
-            d = (lsamp + 2) >= m_buf_len ? 0 : bufferData[(lsamp + 2)];
+            // m_buf_len is the last sample: past it, silence
+            c = (lsamp + 1) > m_buf_len ? 0 : bufferData[(lsamp + 1)];
+            d = (lsamp + 2) > m_buf_len ? 0 : bufferData[(lsamp + 2)];
           }
 
           _playSamp = cubicInterpolate(a1, b, c, d, frac);
@@ -265,22 +269,16 @@ GranuGrain::incr(const long interpType)
             double windX = fastPrecisePow( ax, exp(m_shape_y));
         */
 
-      amps[i] = _playSamp * win * m_chan_amp[i];
-      // to do: pre-allocate everything when dsp is reset and don't use dynamic memory here
+      amps[i] = _playSamp * win * m_chan_amp[i] * fade;
     }
   }
 
   for(size_t i = N; i < nchans; i++)
     amps[i] = amps[N - 1];
 
-  //m_phase += m_incr;
   m_phase_counter++;
 
-  if(m_phase_counter > m_max_count)
-  {
-    //   printf("released at phase %.17g prev %.17g incr %.17g\n", phase, phase-m_incr, m_incr );
-    //   printf("counter %ld maxcount %ld \n", m_phase_counter, m_max_count );
+  if(m_phase_counter > m_max_count || (m_release > 0 && --m_release_left <= 0))
     reset();
-  }
   return amps;
 }

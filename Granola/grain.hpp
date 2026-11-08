@@ -103,6 +103,14 @@ struct GranuGrain
   halp::sound_pin m_pin;
 
   void reset();
+  //! Fades out over \p samples, then stops: a grain stopped before its end
+  //! without a click
+  void release(long samples) noexcept
+  {
+    if(m_active && m_release == 0)
+      m_release = m_release_left = std::max(samples, 1L);
+  }
+  long m_release{}, m_release_left{};
 
   // Current read position, normalized to [0, 1] over the buffer
   double position() const noexcept;

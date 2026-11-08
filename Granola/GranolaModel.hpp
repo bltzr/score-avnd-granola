@@ -152,18 +152,8 @@ public:
     halp::knob_f32<"Gain Jitter Range", halp::range{0., 1., 1.}> gain_j_r;
     // A bell by default rather than a flat window: Beta(3.3, 3.3), close to
     // a Hann window (y is scaled by window_shape::radius)
-    struct : halp::xy_pad_f32<"Window coefs", halp::range{0.f, 1.f, 0.f}>
-    {
-      static constexpr auto range()
-      {
-        struct
-        {
-          float min{0.f}, max{1.f};
-          halp::xy_type<float> init{0.5f, 0.05f};
-        } r;
-        return r;
-      }
-    } win_coefs;
+    halp::xy_pad_f32<"Window coefs", halp::xy_range{.min = 0., .max = 1., .init = {0.5, 0.05}}>
+        win_coefs;
     struct
     {
       halp__enum_combobox("Interpolation mode", Cubic, None, Linear, Cubic)
@@ -307,11 +297,26 @@ public:
   const void* scan_source{};
   bool scan_was_playing{};
 
+  // A held note: its grains come at its own pace, as its pitch sets the
+  // length of its grains
   struct MidiVoice
   {
     bool active{false};
-    double trigger_counter{0};
     uint8_t velocity{0};
+    double counter{0}; // samples since its last grain
+  };
+  // The notes with a grain to make, one bit each
+  struct note_set
+  {
+    uint64_t bits[2]{};
+    void set(int n) noexcept { bits[n >> 6] |= uint64_t(1) << (n & 63); }
+    void reset(int n) noexcept { bits[n >> 6] &= ~(uint64_t(1) << (n & 63)); }
+    void clear() noexcept { bits[0] = bits[1] = 0; }
+    bool any() const noexcept { return bits[0] | bits[1]; }
+    int first() const noexcept
+    {
+      return bits[0] ? std::countr_zero(bits[0]) : 64 + std::countr_zero(bits[1]);
+    }
   };
 
   GrainVec grains;
@@ -326,20 +331,33 @@ public:
   std::atomic<bool> buf_soft_lock{false};
   bool alloccheck{false};
   bool trigger{false};
-  long trigger_counter{0};
+  // Samples since the last grain, with the fraction of a sample the
+  // interval had: grains at the rate Density sets, not one rounded to
+  // whole samples
+  double trigger_counter{0};
+  // The Density Deviation of the next grain, drawn when a grain is made
+  double density_factor{1.};
+  // Gain as heard: it follows the control in a few milliseconds
+  double gain_now{-1.};
+  // In random folder mode, the length of the file the last grain read: the
+  // next grain comes as that one's length and Density say
+  double last_spawn_frames{};
+  // Grains made since prepare(): how fast they come, for tests
+  uint64_t grains_made{};
   int busyCount{0};
   bool useDefaultAmp{true};
   double maxAmp{0};
-  float samplerate;
+  float samplerate{48000.f}; // until prepare()
   float sampleinterval;
   double ms2samps;
   long numoutputs;
 
   std::array<MidiVoice, 128> midi_voices{};
   bool midi_active{false};   // true when at least one MIDI note is held
-  int midi_pending_voice{-1}; // index of next voice to spawn (-1 = none pending)
+  note_set midi_pending;
 
-  std::size_t last_sound_path{}; // hash: stops the grains of a replaced Sound file
+  // The Sound file's data, to stop the grains of a replaced one: it is freed
+  GrainSource last_sound{};
 
   // The folder file the Sound in folder names or indexes, looked up again
   // only when the folder or the value changes
@@ -370,7 +388,13 @@ public:
   void operator()(tick t);
 
 private:
-  rnd::pcg rd;
+  // Another sequence for every instance
+  static std::random_device& random_source()
+  {
+    static thread_local std::random_device d;
+    return d;
+  }
+  rnd::pcg rd{random_source()};
 };
 
 }
