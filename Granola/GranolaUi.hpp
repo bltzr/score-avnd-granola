@@ -279,7 +279,12 @@ struct FolderFiles
 
 struct WaveformItem
 {
-  static constexpr double width() { return 863.; }
+  // As wide as the panel: the host gives it the width of its section, which
+  // is the widest row's
+  static constexpr double min_width = 400.;
+  double m_width{min_width};
+  double width() const noexcept { return m_width; }
+  void set_width(double w) noexcept { m_width = std::max(w, min_width); }
   static constexpr double height() { return 160.; }
   static constexpr double pad = 2.;
   static constexpr double left_pad = pad;
@@ -354,7 +359,7 @@ struct WaveformItem
     return true;
   }
 
-  static constexpr double draw_w() { return width() - left_pad - pad; }
+  double draw_w() const noexcept { return width() - left_pad - pad; }
   // Position, where Scan has moved it while the grains play
   double shown_pos() const
   {
@@ -377,7 +382,7 @@ struct WaveformItem
 
   void paint(auto ctx)
   {
-    constexpr double w = width(), h = height();
+    const double w = width(), h = height();
     constexpr double y0 = top(), y1 = bottom(), wave_h = bottom() - top();
 
     // Inset by pad to match score::GraphicsLayout's own background rect.
@@ -605,56 +610,53 @@ struct Granola::ui
   halp_meta(background, background_dark)
 
   // Named structs down to the source pages: they hold a static member.
-  struct top_t
+  // Where the sound comes from, and the sound with its grains over it. In the
+  // root column, which makes it as wide as the row below: the waveform fills
+  // it.
+  struct sound_t
   {
-    halp_meta(layout, hbox)
+    halp_meta(name, "Sound")
+    halp_meta(layout, section)
+    halp_meta(background, background_mid)
 
-    // Where the sound comes from, and the sound with its grains over it
-    struct sound_t
+    struct source_t
     {
-      halp_meta(name, "Sound")
-      halp_meta(layout, section)
-      halp_meta(background, background_mid)
+      halp_meta(layout, hbox)
+      settable<&ins::source, bare_dropdown> source;
 
-      struct source_t
+      struct pages_t
       {
-        halp_meta(layout, hbox)
-        settable<&ins::source, bare_dropdown> source;
-
-        struct pages_t
+        halp_meta(layout, tabs)
+        halp_flag(hide_tabs);
+        static constexpr auto model = &ins::source;
+        struct
         {
-          halp_meta(layout, tabs)
-          halp_flag(hide_tabs);
-          static constexpr auto model = &ins::source;
-          struct
+          halp_meta(name, "File")
+          halp_meta(layout, hbox)
+          // Small, score's widget for a sound file is its name, as for the
+          // folder: the waveform is below, with the grains over it
+          path_control<&ins::sound, halp::look{.size = halp::control_size::compact}>
+              file;
+        } file;
+        struct
+        {
+          halp_meta(name, "Folder")
+          halp_meta(layout, hbox)
+          path_control<&ins::sounds> folder;
+          struct : settable<&ins::sound_file, bare_dropdown>
           {
-            halp_meta(name, "File")
-            halp_meta(layout, hbox)
-            // Small, score's widget for a sound file is its name, as for the
-            // folder: the waveform is below, with the grains over it
-            path_control<&ins::sound, halp::look{.size = halp::control_size::compact}>
-                file;
-          } file;
-          struct
-          {
-            halp_meta(name, "Folder")
-            halp_meta(layout, hbox)
-            path_control<&ins::sounds> folder;
-            struct : settable<&ins::sound_file, bare_dropdown>
-            {
-              // Room for file names, whatever the folder's files are
-              static constexpr double width() { return 150.; }
-            } sound_file;
-            halp::item<&ins::random> random;
-          } folder;
-        } pages;
-      } source;
+            // Room for file names, whatever the folder's files are
+            static constexpr double width() { return 150.; }
+          } sound_file;
+          halp::item<&ins::random> random;
+        } folder;
+      } pages;
+    } source;
 
-      halp::custom_multi_control<
-          WaveformItem, &ins::pos, &ins::dur, &ins::pos_j, &ins::dur_j>
-          waveform;
-    } sound;
-  } top;
+    halp::custom_multi_control<
+        WaveformItem, &ins::pos, &ins::dur, &ins::pos_j, &ins::dur_j>
+        waveform;
+  } sound;
 
   // In signal order: where and how long grains are and how many, their pitch,
   // their level, and what plays them
@@ -677,10 +679,7 @@ struct Granola::ui
         halp::item<&ins::dur_j, small_slider_as("Deviation")> dur_jitter;
         halp::item<&ins::density, small_knob_as("Density")> density;
         halp::item<&ins::dens_j, small_slider_as("Deviation")> dens_jitter;
-        halp::item<&ins::scan, small_knob_as("Scan")> scan;
       } knobs;
-      // Folder source: Scan goes on when another of its files plays
-      halp::item<&ins::scan_across, halp::label_as("Scan across sounds")> scan_across;
     } grain;
 
     struct
@@ -696,9 +695,13 @@ struct Granola::ui
         halp::item<&ins::rate_j, small_slider_as("Deviation")> jitter;
         // How many grains play backwards
         halp::item<&ins::reverse_chance, small_knob_as("Backwards")> backwards;
+        struct
+        {
+          halp_meta(layout, vbox)
+          halp::item<&ins::rate_j_semitones, halp::label_as("Semitones")> semitones;
+          halp::item<&ins::reverse> reverse;
+        } toggles;
       } knobs;
-      halp::item<&ins::rate_j_semitones, halp::label_as("Semitones")> semitones;
-      halp::item<&ins::reverse> reverse;
     } pitch;
 
     struct
@@ -709,17 +712,17 @@ struct Granola::ui
       struct
       {
         halp_meta(layout, grid)
-        halp_meta(columns, 3)
+        halp_meta(columns, 2)
         halp::item<&ins::gain, small_knob_as("Gain")> gain;
         halp::item<&ins::gain_j, small_slider_as("Deviation")> jitter;
         halp::item<&ins::spread, small_knob_as("Spread")> spread;
+        struct
+        {
+          halp_meta(layout, vbox)
+          halp::item<&ins::src_channels, halp::label_as("Channels")> channels;
+          halp::item<&ins::channel_offset, halp::label_as("Offset")> offset;
+        } channels;
       } knobs;
-      struct
-      {
-        halp_meta(layout, hbox)
-        halp::item<&ins::src_channels, halp::label_as("Channels")> channels;
-        halp::item<&ins::channel_offset, halp::label_as("Offset")> offset;
-      } channels;
     } output;
 
     // The shape of each grain
@@ -756,6 +759,13 @@ struct Granola::ui
         halp::item<&ins::interp_type, dropdown_as("Interpolation")> interpolation;
         halp::item<&ins::loopmode> loop;
       } engine;
+      // Position moving by itself; with the folder, across its files or not
+      struct
+      {
+        halp_meta(layout, hbox)
+        halp::item<&ins::scan, small_knob_as("Scan")> scan;
+        halp::item<&ins::scan_across, halp::label_as("Across sounds")> scan_across;
+      } scan;
     } play;
   } params;
 
@@ -766,9 +776,9 @@ struct Granola::ui
     if(win.editor.pad.update)
       win.editor.pad.update();
 
-    auto& src = top.sound.source;
+    auto& src = sound.source;
     auto& page = src.pages.folder;
-    auto& wf = top.sound.waveform;
+    auto& wf = sound.waveform;
     wf.sound_path = src.pages.file.file.value;
     wf.folder_mode = from_folder();
     if(wf.update)
@@ -797,15 +807,15 @@ struct Granola::ui
 
   bool from_folder() const noexcept
   {
-    using source_type = std::decay_t<decltype(top.sound.source.source.value)>;
-    return top.sound.source.source.value == source_type::Folder;
+    using source_type = std::decay_t<decltype(sound.source.source.value)>;
+    return sound.source.source.value == source_type::Folder;
   }
 
   // The waveform shows the Sound file, or the file picked in the folder
   void show_current_sound()
   {
-    auto& wf = top.sound.waveform;
-    auto& page = top.sound.source.pages.folder;
+    auto& wf = sound.waveform;
+    auto& page = sound.source.pages.folder;
     std::string file = wf.sound_path;
     if(from_folder())
     {
@@ -822,7 +832,7 @@ struct Granola::ui
   // Stopped: the picked file again, rather than the last one played
   void stop()
   {
-    top.sound.waveform.playing_file.clear();
+    sound.waveform.playing_file.clear();
     show_current_sound();
   }
 
@@ -834,9 +844,9 @@ struct Granola::ui
     {
       // Drops and choices on the waveform edit the ports' document values. The
       // controls' `set` hooks are filled by the layout builder (after init).
-      auto& wf = self.top.sound.waveform;
+      auto& wf = self.sound.waveform;
       // Drop onto the waveform: a file plays it, a folder plays its files
-      auto& src = self.top.sound.source;
+      auto& src = self.sound.source;
       using source_type = std::decay_t<decltype(src.source.value)>;
       wf.set_sound = [&src](std::string v) {
         if(auto& c = src.pages.file.file; c.set)
@@ -863,7 +873,7 @@ struct Granola::ui
 
     static void process(ui& self, const playheads& heads)
     {
-      auto& wf = self.top.sound.waveform;
+      auto& wf = self.sound.waveform;
       wf.heads = heads;
       if(wf.update)
         wf.update();
@@ -871,7 +881,7 @@ struct Granola::ui
 
     static void process(ui& self, const current_sound& cs)
     {
-      auto& wf = self.top.sound.waveform;
+      auto& wf = self.sound.waveform;
       wf.status = cs.status;
       wf.playing_file = cs.index >= 0 ? std::string{cs.name} : std::string{};
       self.show_current_sound();
