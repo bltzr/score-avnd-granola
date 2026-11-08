@@ -1,6 +1,8 @@
 #include "Granola.hpp"
 #include "utils.hpp"
 
+#include <ossia/math/safe_math.hpp>
+
 #include <boost/container/static_vector.hpp>
 
 namespace GranolaV1
@@ -180,9 +182,13 @@ void Granola::operator()(tick t)
             trigger = false;
           }
 
-          grains[i].set(pos, dur, rate,
-              windcoef, spawn_ampvec, inputs.sound,
-              inputs.loopmode, inputs.window_mode, ch_offset, n_channels);
+          // A NaN or infinite position, duration or pitch, from a cable or a
+          // Jitter Range: no grain, which would size its window from it
+          if(ossia::safe_isfinite(pos) && ossia::safe_isfinite(dur)
+             && ossia::safe_isfinite(rate))
+            grains[i].set(
+                pos, dur, rate, windcoef, spawn_ampvec, inputs.sound, inputs.loopmode,
+                inputs.window_mode, ch_offset, n_channels);
           alloccheck = true;
         }
       }
