@@ -836,13 +836,11 @@ TEST_CASE("Picking Folder in the panel takes the Sound file's folder, as one und
     m.set("Sound", dir.filePath("b.wav").toStdString());
     auto* selector = source_selector(m);
     REQUIRE(selector);
-    // Its box, under its label
-    constexpr double box = Granola::SourceItem::label_h;
 
     // A click on the selector: Folder, the Sound file's folder and the file
     const auto picked = text_of(m, "Sound in folder");
     const int before = stack.currentIndex();
-    click(m, selector, {20., box + 11.});
+    click(m, selector, {20., 11.});
     CHECK(source_is(m, "Folder"));
     CHECK(
         QFileInfo{QString::fromStdString(text_of(m, "Sounds"))}.canonicalFilePath()
@@ -862,19 +860,19 @@ TEST_CASE("Picking Folder in the panel takes the Sound file's folder, as one und
     // A Folder set already stays
     m.set("Sounds", other.path().toStdString());
     m.set("Sound in folder", std::string("x.wav"));
-    click(m, selector, {20., box + 11.});
+    click(m, selector, {20., 11.});
     CHECK(source_is(m, "Folder"));
     CHECK(text_of(m, "Sounds") == other.path().toStdString());
     CHECK(text_of(m, "Sound in folder") == "x.wav");
 
     // The strip: - back to File, + Folder; a click on the source shown does
     // nothing
-    click(m, selector, {58., box + 17.});
+    click(m, selector, {58., 17.});
     CHECK(source_is(m, "File"));
     const int at_file = stack.currentIndex();
-    click(m, selector, {58., box + 17.});
+    click(m, selector, {58., 17.});
     CHECK(stack.currentIndex() == at_file);
-    click(m, selector, {58., box + 5.});
+    click(m, selector, {58., 5.});
     CHECK(source_is(m, "Folder"));
   });
 }

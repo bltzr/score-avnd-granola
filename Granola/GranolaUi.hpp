@@ -229,10 +229,8 @@ struct SourceItem
 {
   using source_type = std::decay_t<decltype(Granola::ins{}.source.value)>;
   static constexpr double width() { return 64.; }
-  // Its label above the box, as score puts a port's label above its control
-  static constexpr double label_h = 12.;
-  static constexpr double box_h = 22.;
-  static constexpr double height() { return label_h + box_h; }
+  // As tall as score's dropdowns
+  static constexpr double height() { return 23.; }
   static constexpr double strip = 12.; // score::Stepper::width
 
   source_type value{};
@@ -244,7 +242,7 @@ struct SourceItem
 
   void paint(auto ctx)
   {
-    constexpr double w = width(), h = box_h, top = label_h;
+    constexpr double w = width(), h = height();
     // In the colours and font of score's dropdowns
     const auto& skin = score::Skin::instance();
     const auto color = [&](const QColor& q) {
@@ -258,14 +256,6 @@ struct SourceItem
     const auto box = color(skin.Emphasis2.main.brush.color());
     const auto text = color(skin.Base4.main.brush.color());
 
-    // The label, as a port's
-    ctx.begin_path();
-    ctx.set_fill_color(color(skin.HalfLight.main.brush.color()));
-    ctx.set_font(skin.Medium8Pt.family().toStdString());
-    ctx.set_font_size(skin.Medium8Pt.pixelSize() > 0 ? skin.Medium8Pt.pixelSize() : 11);
-    ctx.draw_text(0., 9.5, "Source");
-    ctx.fill();
-    ctx.translate(0., top);
 
     // The box, its orange edge
     ctx.begin_path();
@@ -307,10 +297,8 @@ struct SourceItem
   bool mouse_press(double x, double y)
   {
     source_type v = value == source_type::Folder ? source_type::File : source_type::Folder;
-    if(y < label_h)
-      return false;
     if(x >= width() - 1. - strip)
-      v = y < label_h + box_h / 2. ? source_type::Folder : source_type::File;
+      v = y < height() / 2. ? source_type::Folder : source_type::File;
     if(v == value)
       return true;
     if(pick)
@@ -757,11 +745,32 @@ struct Granola::ui
     struct source_t
     {
       halp_meta(layout, grid)
-      // The Source's port, its item, the pages, Start, End, Wrap at end
-      halp_meta(columns, 6)
+      // The Source, the pages, Start, End, Wrap at end
+      halp_meta(columns, 5)
       halp_meta(alignment, halp::alignments::left)
       halp_meta(spacing, 6)
-      halp::custom_control<SourceItem, &ins::source> source;
+      // The Source selector as a control of score: its label above it, from
+      // its left edge, its port beside it
+      struct
+      {
+        halp_meta(layout, vbox)
+        halp_meta(padding, 0)
+        struct
+        {
+          halp_meta(layout, hbox)
+          halp_meta(padding, 0)
+          // Over the port and the gap after it, as score's labels start at
+          // their control
+          halp::spacing port{.width = 22, .height = 0};
+          halp::label text{"Source"};
+        } label;
+        struct
+        {
+          halp_meta(layout, hbox)
+          halp_meta(padding, 0)
+          halp::custom_control<SourceItem, &ins::source> source;
+        } box;
+      } selector;
 
       struct pages_t
       {
@@ -773,6 +782,7 @@ struct Granola::ui
         {
           halp_meta(name, "File")
           halp_meta(layout, hbox)
+          halp_meta(alignment, halp::alignments::left)
           // Small, score's widget for a sound file is its name, as for the
           // folder: the waveform is below, with the grains over it
           path_control<&ins::sound, halp::look{.size = halp::control_size::compact}>
@@ -784,9 +794,8 @@ struct Granola::ui
           halp_meta(layout, grid)
           halp_meta(columns, 3)
           halp_meta(alignment, halp::alignments::left)
-          // In the row's cell: its labels at the height of the row's others
           halp_meta(padding, 0)
-          halp_meta(spacing, 0)
+          halp_meta(spacing, 6)
           path_control<&ins::sounds, halp::label_as("Folder")> folder;
           struct : settable<&ins::sound_file, dropdown_as("File")>
           {
@@ -829,25 +838,22 @@ struct Granola::ui
       halp_meta(name, "Play")
       halp_meta(layout, section)
       halp_meta(background, background_mid)
+      // What starts the grains, then the voices, then Scan: in columns as
+      // the other sections, the labels above the controls
       struct
       {
-        halp_meta(layout, hbox)
+        halp_meta(layout, grid)
+        halp_meta(columns, 3)
+        halp_meta(alignment, halp::alignments::left)
         halp::item<&ins::playing> playing;
         halp::item<&ins::trig> trigger;
         halp::item<&ins::midi_gate, halp::label_as("MIDI")> midi;
-      } transport;
-      struct
-      {
-        halp_meta(layout, hbox)
         halp::item<&ins::num_voices, halp::label_as("Voices")> voices;
         halp::item<&ins::interp_type, dropdown_as("Interpolation")> interpolation;
-      } engine;
-      // Position moving by itself; with the folder, across its files or not
-      struct
-      {
-        halp_meta(layout, hbox)
+        halp::spacing none{.width = 0, .height = 0};
+        // Position moving by itself; with the folder, across its files or not
         halp::item<&ins::scan, small_knob_as("Scan")> scan;
-        halp::item<&ins::scan_mode, bare_dropdown> scan_mode;
+        halp::item<&ins::scan_mode, dropdown_as("Scan mode")> scan_mode;
         // Only for the folder's sounds
         struct
         {
@@ -859,7 +865,7 @@ struct Granola::ui
           }
           halp::item<&ins::scan_across, halp::label_as("Across sounds")> scan_across;
         } across;
-      } scan;
+      } controls;
     } play;
 
     struct
@@ -963,8 +969,8 @@ struct Granola::ui
 
   bool from_folder() const noexcept
   {
-    using source_type = std::decay_t<decltype(sound.source.source.value)>;
-    return sound.source.source.value == source_type::Folder;
+    using source_type = std::decay_t<decltype(sound.source.selector.box.source.value)>;
+    return sound.source.selector.box.source.value == source_type::Folder;
   }
 
   // The waveform shows the Sound file, or the file picked in the folder.
@@ -1006,27 +1012,27 @@ struct Granola::ui
       auto& wf = self.sound.waveform;
       // Drop onto the waveform: a file plays it, a folder plays its files
       auto& src = self.sound.source;
-      using source_type = std::decay_t<decltype(src.source.value)>;
+      using source_type = std::decay_t<decltype(src.selector.box.source.value)>;
       wf.set_sound = [&src](std::string v) {
         if(auto& c = src.pages.file.file; c.set)
           c.set(std::move(v));
-        if(src.source.set)
-          src.source.set(source_type::File);
+        if(src.selector.box.source.set)
+          src.selector.box.source.set(source_type::File);
       };
       wf.set_folder = [&src](std::string v) {
         if(auto& c = src.pages.folder.folder; c.set)
           c.set(std::move(v));
-        if(src.source.set)
-          src.source.set(source_type::Folder);
+        if(src.selector.box.source.set)
+          src.selector.box.source.set(source_type::Folder);
       };
       // The user picks Folder while it is empty: the Sound file's folder, with
       // that file picked, in the same gesture, one undo step. The Sound file's
       // path is the one score located; score stores the folder relative to the
       // document as it stores the folders one picks.
-      src.source.pick = [&src](source_type v) {
-        if(!src.source.set)
+      src.selector.box.source.pick = [&src](source_type v) {
+        if(!src.selector.box.source.set)
           return;
-        src.source.set(v);
+        src.selector.box.source.set(v);
         auto& page = src.pages.folder;
         const auto& sound = src.pages.file.file.value;
         if(v == source_type::Folder && page.folder.value.empty() && !sound.empty()
