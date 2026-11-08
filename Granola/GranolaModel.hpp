@@ -1,40 +1,29 @@
 #pragma once
-
 #include "grain.hpp"
-#include "utils.hpp"
 
-#include <QDebug>
+#include <ossia/detail/variant.hpp>
 
-#include <atomic>
-#include <functional>
 #include <halp/audio.hpp>
 #include <halp/controls.hpp>
+#include <halp/folder_combobox.hpp>
 #include <halp/mappers.hpp>
 #include <halp/meta.hpp>
 #include <halp/midi.hpp>
-#include <halp/folder_combobox.hpp>
-#include <halp/sample_accurate_controls.hpp>
 #include <halp/sound_set.hpp>
 #include <halp/soundfile_port.hpp>
 #include <libremidi/message.hpp>
 #include <rnd/random.hpp>
 
-#include <ossia/detail/variant.hpp>
-
-#include <boost/container/static_vector.hpp>
-
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
-#include <memory>
-
+#include <functional>
 #include <random>
+#include <vector>
 
 namespace Granola
 {
-
-
-
 class Granola
 {
 public:
@@ -43,7 +32,7 @@ public:
   halp_meta(
       description,
       "Generate granular audio from a sound file with controllable position, duration, "
-      "pitch, density and jitter.")
+      "pitch, density, their deviations, and where they play.")
   halp_meta(c_name, "granola")
   halp_meta(uuid, "38F9684D-54A6-4F48-91E4-3B251F0956EA")
 
@@ -74,8 +63,6 @@ public:
           self.outputs.audio.request_channels(self.output_channels(this->channels()));
       }
     } sound;
-    //halp::soundfile_port<"Window", double> win; // not supported yet
-    //halp::range_slider_f32<"In", halp::range_slider_range{-10, 100, {5, 20}}> ta_range;
     halp::hslider_f32<"Position", halp::range{0.00000001, 1., 0.00000001}> pos;
     // Each Deviation spreads its control per grain, as a normal distribution
     // of deviation d / 4: at 1, 95% of the grains within ±0.5 of it (of the
@@ -150,7 +137,10 @@ public:
       static constexpr std::string_view former_name() noexcept { return "Gain Jitter"; }
     } gain_j;
     // Unused: free for a control to come, of another kind than a knob
-    halp::knob_f32<"Gain Jitter Range", halp::range{0., 1., 1.}> gain_j_r;
+    struct : halp::knob_f32<"Reserved", halp::range{0., 1., 1.}>
+    {
+      static constexpr std::string_view former_name() noexcept { return "Gain Jitter Range"; }
+    } gain_j_r;
     // A bell by default rather than a flat window: Beta(3.3, 3.3), close to
     // a Hann window (y is scaled by window_shape::radius)
     halp::xy_pad_f32<"Window coefs", halp::xy_range{.min = 0., .max = 1., .init = {0.5, 0.05}}>
@@ -175,18 +165,11 @@ public:
     {
       void update(Granola& self) { self.set_voice_count(value); }
     } num_voices;
-    struct : halp::toggle<"Continuous", halp::toggle_setup{.init = true}> {
-      void update(Granola& self)
-      {
-        self.trigger = value;
-      }
-    }playing;
-    struct : halp::impulse_button<"Trigger"> {
-      /*void update(Granola& self)
-      {
-        self.trigger = true;
-      }*/
-    } trig;
+    struct : halp::toggle<"Continuous", halp::toggle_setup{.init = true}>
+    {
+      void update(Granola& self) { self.trigger = value; }
+    } playing;
+    halp::impulse_button<"Trigger"> trig;
     halp::midi_bus<"MIDI In", libremidi::message> midi;
     halp::toggle<"listening to MIDI", halp::toggle_setup{.init = true}> midi_gate;
 
@@ -251,11 +234,14 @@ public:
   struct playheads
   {
     static constexpr int max_heads = 32;
+    // Positions and levels in [0, 1] as integers of this many steps
+    static constexpr double pos_scale = 65535.;
+    static constexpr double amp_scale = 255.;
     uint8_t count;
     bool scanning;           // whether Scan moves Position, to:
-    uint16_t scan;           // where it has moved it in the region, 0-65535
-    uint8_t amp[max_heads];  // window amplitude, 0-255
-    uint16_t pos[max_heads]; // position in the current sound, 0-65535
+    uint16_t scan;           // where it has moved it in the region
+    uint8_t amp[max_heads];  // window amplitude
+    uint16_t pos[max_heads]; // position in the current sound
   };
   // The sound that plays from the folder, and whether it could be decoded
   struct current_sound
@@ -356,9 +342,6 @@ public:
   uint64_t grains_made{};
 
   float samplerate{48000.f}; // until prepare()
-  float sampleinterval;
-  double ms2samps;
-  long numoutputs;
 
   std::array<MidiVoice, 128> midi_voices{};
   bool midi_active{false};   // true when at least one MIDI note is held
@@ -377,8 +360,6 @@ public:
 
   void send_playheads(int frames, const GrainSource& cur);
 
-  // t_critical  lock; // is there an equivalent?
-
   using setup = halp::setup;
   void prepare(setup info);
 
@@ -388,7 +369,7 @@ public:
   //! The outputs for a sound of \p sound_channels: Output Channels, else as
   //! many as Channels reads of it; two at least with Spread
   int output_channels(int sound_channels) const noexcept;
-  //! Stops the grains past \p n
+  //! Fades out the grains past \p n
   void set_voice_count(int n);
   void clear();
 
@@ -396,6 +377,48 @@ public:
   void operator()(tick t);
 
 private:
+  // What a tick's grains share, found once for it
+  struct tick_plan
+  {
+    GrainSource cur;
+    int cur_index{-1};
+    bool from_folder{};
+    long voices{};
+    int n_channels{1}, ch_offset{}, live_out_channels{}, out_channels{};
+    window_shape window;
+    const window_table* table{};
+    bool table_found{};
+    interpolation interp{};
+    double region_lo{}, region_len{1.};
+    double scan_step{}, scan_end{1.};
+    double interval{};
+    std::array<double, 128> note_interval{};
+    double gain_step{};
+  };
+  tick_plan make_plan(const GrainSource& cur, int cur_index, bool from_folder) noexcept;
+
+  void stop_replaced_sound() noexcept;
+  GrainSource current_source(bool from_folder, int& index) noexcept;
+  void notify_current_sound(int index, const GrainSource& cur) noexcept;
+  void read_midi() noexcept;
+
+  //! A Deviation's value for a grain: N(0, d / 4)
+  float deviate(float deviation) noexcept;
+  //! A grain's speed at \p base, with Pitch Deviation and Reverse
+  float grain_rate(float base) noexcept;
+  //! The shortest grain, as a part of a sound of \p frames, at \p rate
+  double min_duration(double rate, double frames) const noexcept;
+  //! The pitch of a MIDI note, middle C at 1
+  static float note_ratio(int note) noexcept { return std::exp2((note - 60) / 12.f); }
+
+  //! Starts a grain: false if there is nothing to read
+  bool spawn(Grain& g, tick_plan& p) noexcept;
+  //! Renders and mixes \p g from sample \p s0 of the block of \p n samples
+  //! at \p b0: the sample after its last one in the block
+  int play(Grain& g, int s0, int n, int b0, const tick_plan& p) noexcept;
+  void advance_scan(const tick_plan& p) noexcept;
+  void advance_timing(const tick_plan& p) noexcept;
+
   // Another sequence for every instance
   static std::random_device& random_source()
   {

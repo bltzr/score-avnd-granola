@@ -1,22 +1,26 @@
 #pragma once
 #include <Granola/GranolaModel.hpp>
+
+#include <score/tools/NaturalSort.hpp>
+
+#include <Crousti/SoundSet.hpp>
+
+#include <avnd/introspection/range.hpp>
 #include <halp/custom_widgets.hpp>
 #include <halp/layout.hpp>
 #include <halp/waveform_view.hpp>
 
-#include <QCollator>
+#include <QApplication>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QTimer>
-#include <QApplication>
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cmath>
-#include <cfloat>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <optional>
 
@@ -146,28 +150,30 @@ struct path_control : halp::item_base
   std::function<void(std::string)> set;
 };
 
-inline QString sound_file_filter()
+//! The sound files Granola reads, as file name filters: *.wav and so on,
+//! parsed as the host parses a sound set's extensions
+inline const QStringList& sound_name_filters()
 {
-  QString filter = "Sound files (";
-  for(const auto& ext :
-      QString::fromUtf8(
-          Granola::sound_extensions.data(), qsizetype(Granola::sound_extensions.size()))
-          .split(' ', Qt::SkipEmptyParts))
-    filter += "*." + ext + " ";
-  return filter.trimmed() + ")";
+  static const QStringList filters = [] {
+    QStringList f;
+    for(const auto& ext : oscr::soundSetExtensions(Granola::sound_extensions))
+      f.push_back("*." + ext);
+    return f;
+  }();
+  return filters;
 }
 
-// The sound that plays, drawn by the host, with the grain window, the jitter
-// ranges and the playheads over it; its name, length and channels above.
-// Gestures: horizontal drag = position; vertical drag = duration in the window
-// centre, position jitter at the start edge, duration jitter at the end edge.
-// Empty, a click chooses a sound file, or a folder for the Folder source.
+inline QString sound_file_filter()
+{
+  return "Sound files (" + sound_name_filters().join(' ') + ")";
+}
+
 // The files of the folder, for the waveform to show the one that plays
 // before the processor runs
 struct FolderFiles
 {
-  // The folder's files, in the order the processor indexes them: natural
-  // order, without case
+  // The folder's files, in the order the host indexes them
+  // (score::naturalLess)
   std::string folder;
   std::string value; // Sound in folder: a file name, or an index
   QStringList files;
@@ -179,27 +185,10 @@ struct FolderFiles
     files.clear();
     if(!folder.empty())
     {
-      QStringList filters;
-      for(const auto& ext : QString::fromUtf8(
-                                Granola::sound_extensions.data(),
-                                qsizetype(Granola::sound_extensions.size()))
-                                .split(' ', Qt::SkipEmptyParts))
-        filters.push_back("*." + ext);
-      files = QDir{QString::fromStdString(folder)}.entryList(filters, QDir::Files);
-      QCollator order;
-      order.setNumericMode(true);
-      order.setCaseSensitivity(Qt::CaseInsensitive);
-      std::sort(files.begin(), files.end(), order);
+      files = QDir{QString::fromStdString(folder)}.entryList(
+          sound_name_filters(), QDir::Files);
+      score::sortNaturally(files);
     }
-  }
-
-  static std::optional<int> as_index(const std::string& v)
-  {
-    double d{};
-    if(v.empty()
-       || std::from_chars(v.data(), v.data() + v.size(), d).ptr != v.data() + v.size())
-      return std::nullopt;
-    return int(d);
   }
 
   // The file that plays: the one picked, the one at an index, or the first
@@ -208,15 +197,29 @@ struct FolderFiles
   {
     if(files.empty())
       return {};
-    if(auto i = as_index(value))
+    if(auto i = halp::folder_index(value))
       return files[std::clamp(*i, 0, int(files.size()) - 1)];
     const auto v = QString::fromStdString(value);
     return files.contains(v) ? v : files.front();
   }
 };
 
+//! Whether a control's range is [0, 1], or nearly: the waveform takes the
+//! normalized values the host gives it as the values themselves
+template <auto F>
+consteval bool unit_range()
+{
+  constexpr auto r = avnd::get_range<std::decay_t<decltype(Granola::ins{}.*F)>>();
+  return r.min >= 0. && r.min < 1e-6 && r.max == 1.;
+}
 
-
+// The sound that plays, drawn by the host, with the grain window, the
+// deviations and the playheads over it; its name, length and channels above;
+// the region (Sample Start, Sample End) with a handle at each edge.
+// Gestures: horizontal drag = position; vertical drag = duration in the
+// window's middle, position deviation at its start edge, duration deviation
+// at its end edge. Empty, or on its name, a click chooses a sound file, or a
+// folder for the Folder source.
 struct WaveformItem
 {
   // As wide as the panel: the host gives it the width of its section, which
@@ -244,6 +247,10 @@ struct WaveformItem
   // custom_multi_control, normalized: their ranges are [0, 1]. Kept up to date
   // by the host; a drag edits them through the transaction, as one undo step.
   enum : int { POS, DUR, POS_J, DUR_J, START, END };
+  static_assert(
+      unit_range<&Granola::ins::pos>() && unit_range<&Granola::ins::dur>()
+      && unit_range<&Granola::ins::pos_j>() && unit_range<&Granola::ins::dur_j>()
+      && unit_range<&Granola::ins::sample_start>() && unit_range<&Granola::ins::sample_end>());
   std::array<double, 6> values{0., 0.1, 0., 0., 0., 1.};
   halp::multi_transaction transaction;
   float pos() const noexcept { return float(values[POS]); }
@@ -321,7 +328,7 @@ struct WaveformItem
   // Position, where Scan has moved it while the grains play
   double shown_pos() const
   {
-    return heads.scanning ? heads.scan / 65535. : pos();
+    return heads.scanning ? heads.scan / Granola::playheads::pos_scale : pos();
   }
   double win_x0() const { return x_in_region(shown_pos()); }
   double win_x1() const
@@ -395,8 +402,8 @@ struct WaveformItem
 
       // Deviations, both symmetric (±), as whiskers so that the window's
       // fill keeps its edges: position around the start edge at the top,
-      // duration around the end edge at the bottom. A jitter j spreads as
-      // N(0, j / 4): the whiskers span two deviations.
+      // duration around the end edge at the bottom. A Deviation d spreads as
+      // N(0, d / 4): the whiskers span two of those.
       auto whisker_color = ctx.to_rgba(halp::colors::editable_value_light);
       whisker_color.a = 200;
       auto whisker = [&](double xa, double xb, double y) {
@@ -420,10 +427,10 @@ struct WaveformItem
       // One bar per playing grain, fading with the grain's window
       auto head = ctx.to_rgba(halp::colors::runtime_value_light);
       ctx.set_stroke_width(1.);
-      for(int i = 0; i < heads.count; i++)
+      for(int i = 0; i < std::min<int>(heads.count, Granola::playheads::max_heads); i++)
       {
-        const double px = left_pad + heads.pos[i] / 65535. * draw_w();
-        head.a = uint8_t(64 + heads.amp[i] * 191 / 255);
+        const double px = left_pad + heads.pos[i] / Granola::playheads::pos_scale * draw_w();
+        head.a = uint8_t(64 + heads.amp[i] * 191 / int(Granola::playheads::amp_scale));
         ctx.begin_path();
         ctx.set_stroke_color(head);
         ctx.move_to(px, y0);
@@ -477,8 +484,8 @@ struct WaveformItem
   {
     none,
     window,     // vertical -> duration
-    start_edge, // vertical -> position jitter
-    end_edge,   // vertical -> duration jitter
+    start_edge, // vertical -> position deviation
+    end_edge,   // vertical -> duration deviation
     region      // a handle of the region, in the header: Sample Start or End
   };
   int m_region_edge{START};
@@ -794,7 +801,17 @@ struct Granola::ui
         halp_meta(layout, hbox)
         halp::item<&ins::scan, small_knob_as("Scan")> scan;
         halp::item<&ins::scan_mode, bare_dropdown> scan_mode;
-        halp::item<&ins::scan_across, halp::label_as("Across sounds")> scan_across;
+        // Only for the folder's sounds
+        struct
+        {
+          halp_meta(layout, hbox)
+          static constexpr auto condition()
+          {
+            using source = std::decay_t<decltype(ins{}.source.value)>;
+            return halp::enabled_when<&ins::source, source::Folder>{};
+          }
+          halp::item<&ins::scan_across, halp::label_as("Across sounds")> scan_across;
+        } across;
       } scan;
     } play;
   } params;
@@ -811,8 +828,6 @@ struct Granola::ui
     auto& wf = sound.waveform;
     wf.sound_path = src.pages.file.file.value;
     wf.folder_mode = from_folder();
-    if(wf.update)
-      wf.update();
     // Only the panel changes here, but for one case: this also runs on undo
     // and redo, where an edit would cut the redo history.
     wf.folder_files.set_folder(page.folder.value);
@@ -821,7 +836,7 @@ struct Granola::ui
     // Switching to the folder while it is empty: the Sound file's folder,
     // with that file picked. score applies these after the switch, and not
     // when the switch is undone or redone.
-    const bool folder = from_folder();
+    const bool folder = wf.folder_mode;
     if(wf.seen && folder && !wf.was_folder && page.folder.value.empty()
        && !wf.sound_path.empty() && page.folder.set && page.sound_file.set)
     {
@@ -833,6 +848,8 @@ struct Granola::ui
     wf.was_folder = folder;
 
     show_current_sound();
+    if(wf.update)
+      wf.update();
   }
 
   bool from_folder() const noexcept
@@ -854,7 +871,9 @@ struct Granola::ui
                                    ? wf.playing_file
                                    : wf.folder_files.current().toStdString();
       if(!page.folder.value.empty() && !name.empty())
-        file = page.folder.value + "/" + name;
+        file = QDir{QString::fromStdString(page.folder.value)}
+                   .filePath(QString::fromStdString(name))
+                   .toStdString();
     }
     wf.show_file(file);
   }
@@ -913,7 +932,10 @@ struct Granola::ui
     {
       auto& wf = self.sound.waveform;
       wf.status = cs.status;
-      wf.playing_file = cs.index >= 0 ? std::string{cs.name} : std::string{};
+      // Its name, NUL-terminated by the processor; within the array anyway
+      wf.playing_file = cs.index >= 0
+                            ? std::string{cs.name, ::strnlen(cs.name, sizeof(cs.name))}
+                            : std::string{};
       self.show_current_sound();
       if(wf.update)
         wf.update();
