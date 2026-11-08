@@ -4,10 +4,9 @@
 #include <halp/layout.hpp>
 #include <halp/waveform_view.hpp>
 
-#include <QCursor>
 #include <QDir>
+#include <QFileDialog>
 #include <QFileInfo>
-#include <QMenu>
 
 #include <algorithm>
 #include <charconv>
@@ -16,8 +15,8 @@
 
 namespace Granola
 {
-// Custom widget for the "Window coefs" XY port: paints the actual grain
-// window shape for the current coefficients. Dragging maps x/y like a pad.
+// The "Window coefs" XY port as the grain window it makes, for the current
+// window shape. Dragging maps x/y like a pad.
 struct WindowShapeItem
 {
   static constexpr double width() { return 220.; }
@@ -104,13 +103,6 @@ struct WindowShapeItem
     ctx.draw_rounded_rect(0., 0., w, h, 3.);
     ctx.fill();
 
-    // Title painted on the widget's top row, next to the port dot.
-    ctx.begin_path();
-    ctx.set_fill_color({255, 255, 255, 255});
-    ctx.set_font_size(9.);
-    ctx.draw_text(16., 11., "Window coefficients");
-    ctx.fill();
-
     ctx.begin_path();
     ctx.move_to(pad, h - pad);
     for(int i = 0; i <= N; i++)
@@ -165,89 +157,116 @@ struct WindowShapeItem
   }
 };
 
-// Bound to the window_mode enum port; addon-local QMenu dropdown.
-struct WindowModeItem
+// Presentation of the controls, as in the other synthesizers of score
+inline constexpr halp::look large_knob{.size = halp::control_size::large};
+consteval halp::look small_knob_as(std::string_view name)
 {
-  static constexpr double width() { return 50.; }
-  static constexpr double height() { return 24.; }
-  static constexpr std::array<const char*, 3> names{"Beta", "Cos", "Kuma"};
+  auto l = halp::label_as(name);
+  l.size = halp::control_size::compact;
+  l.widget = halp::control_widget::knob;
+  return l;
+}
+consteval halp::look dropdown_as(std::string_view name)
+{
+  auto l = halp::label_as(name);
+  l.widget = halp::control_widget::combo;
+  return l;
+}
 
-  int value{0};
-  std::function<void(int)> set;
+// A control whose value the panel can also set, e.g. from the waveform's
+// gestures
+template <auto F, halp::look L = halp::look{}>
+struct settable : halp::control<F, L>
+{
+  std::function<void(typename halp::control<F, L>::control_value_type)> set;
+};
+
+// A sound file, or a folder, as a chip showing its name: click to choose one,
+// or drop one on it.
+template <bool Folder>
+struct PathChip
+{
+  static constexpr double width() { return Folder ? 160. : 220.; }
+  static constexpr double height() { return 20.; }
+
+  std::string value;
+  std::function<void(std::string)> set;
   std::function<void()> update;
 
   void paint(auto ctx)
   {
     ctx.begin_path();
     ctx.set_fill_color(halp::colors::background_darker);
-    ctx.draw_rounded_rect(0., 0., width(), height(), 2.);
+    ctx.draw_rounded_rect(0., 0., width(), height(), 3.);
     ctx.fill();
+
+    std::string_view text = Folder ? "Choose a folder…" : "Choose a sound file…";
+    if(!value.empty())
+    {
+      std::string_view v = value;
+      while(v.size() > 1 && (v.back() == '/' || v.back() == '\\'))
+        v.remove_suffix(1);
+      const auto slash = v.find_last_of("/\\");
+      text = slash == std::string_view::npos ? v : v.substr(slash + 1);
+    }
     ctx.begin_path();
-    ctx.set_fill_color({255, 255, 255, 255});
-    ctx.set_font_size(11.);
-    ctx.draw_text(8., 16., names[std::clamp(value, 0, 2)]);
+    ctx.set_fill_color(value.empty() ? halp::colors::mid : halp::colors::lighter);
+    ctx.set_font_size(9.);
+    ctx.draw_text(6., 14., text);
     ctx.fill();
   }
 
   bool mouse_press(double, double)
   {
-    QMenu menu;
-    for(int i = 0; i < (int)names.size(); i++)
-    {
-      auto* a = menu.addAction(names[i]);
-      a->setCheckable(true);
-      a->setChecked(i == value);
-      a->setData(i);
-    }
-    if(auto* chosen = menu.exec(QCursor::pos()))
-      if(set)
-        set(chosen->data().toInt());
+    const QString start = QFileInfo{QString::fromStdString(value)}.absolutePath();
+    QString path;
+    if constexpr(Folder)
+      path = QFileDialog::getExistingDirectory(nullptr, "Folder of sounds", start);
+    else
+      path = QFileDialog::getOpenFileName(
+          nullptr, "Sound file", start, sound_file_filter());
+    if(!path.isEmpty() && set)
+      set(path.toStdString());
     return true;
   }
-};
 
-// A cable port shown as a small "label value" chip, carrying the port's value
-// (synced) and a set hook. The pos/dur/jitter ports use this: the waveform
-// gestures are the editor, this shows the current number and feeds the widget.
-template <typename T, int W = 80>
-struct PortDotValue
-{
-  static constexpr double width() { return double(W); }
-  static constexpr double height() { return 16.; }
-
-  std::string_view label;
-  T value{};
-  std::function<void(T)> set;
-
-  void paint(auto ctx)
+  bool drop(const std::vector<std::string>& paths)
   {
-    char buf[64];
-    // Float ports are 0..1 normalized -> show as a rounded percentage.
-    if constexpr(std::is_floating_point_v<T>)
-      std::snprintf(buf, sizeof(buf), "%.*s %.0f%%", (int)label.size(), label.data(),
-                    (double)value * 100.);
-    else
-      std::snprintf(buf, sizeof(buf), "%.*s", (int)label.size(), label.data());
-    ctx.begin_path();
-    ctx.set_fill_color(halp::colors::mid);
-    ctx.set_font_size(8.);
-    ctx.draw_text(2., 11., buf);
-    ctx.fill();
+    if(paths.empty() || !set)
+      return false;
+    const QFileInfo fi{QString::fromStdString(paths[0])};
+    if(Folder != fi.isDir())
+      return false;
+    set(fi.absoluteFilePath().toStdString());
+    return true;
+  }
+
+  static QString sound_file_filter()
+  {
+    QString filter = "Sound files (";
+    for(const auto& ext :
+        QString::fromUtf8(
+            Granola::sound_extensions.data(), qsizetype(Granola::sound_extensions.size()))
+            .split(' ', Qt::SkipEmptyParts))
+      filter += "*." + ext + " ";
+    return filter.trimmed() + ")";
   }
 };
 
-// Waveform display + direct-manipulation gestures for the current sound.
-// Peaks arrive from the processor over the message bus; the position/duration
-// window overlay (and jitter bands) is synced from the ports in
-// ui::on_control_update. Gestures: horizontal drag = position; vertical drag =
-// duration in the window centre, position jitter at the start edge, duration
-// jitter at the end edge.
+// The sound that plays, drawn by the host, with the grain window, the jitter
+// ranges and the playheads over it; its name, length and channels above.
+// Gestures: horizontal drag = position; vertical drag = duration in the window
+// centre, position jitter at the start edge, duration jitter at the end edge.
+// Empty, a click chooses a sound file, or a folder for the Folder source.
 struct WaveformItem
 {
-  static constexpr double width() { return 380.; }
-  static constexpr double height() { return 100.; }
+  static constexpr double width() { return 460.; }
+  static constexpr double height() { return 120.; }
   static constexpr double pad = 2.;
   static constexpr double left_pad = pad;
+  static constexpr double header = 15.; // the name, length and channels
+  static constexpr double top() { return pad + header; }
+  static constexpr double bottom() { return height() - pad; }
 
   // Drawn by the host from the file itself, see halp::waveform_view
   halp::waveform_view waveform;
@@ -259,6 +278,8 @@ struct WaveformItem
 
   // control values, synced in ui::on_control_update
   float pos{}, pos_j{}, dur{}, dur_j{};
+  float pos_j_r{1.f}, dur_j_r{1.f};
+  bool folder_mode{};
 
   std::function<void()> update;
   // wired in ui::bus::init to the pos/dur/jitter ports' document values
@@ -322,6 +343,7 @@ struct WaveformItem
   void paint(auto ctx)
   {
     constexpr double w = width(), h = height();
+    constexpr double y0 = top(), y1 = bottom(), wave_h = bottom() - top();
 
     // Inset by pad to match score::GraphicsLayout's own background rect.
     ctx.begin_path();
@@ -330,30 +352,29 @@ struct WaveformItem
     ctx.fill();
 
     if constexpr(requires { ctx.draw_waveform(waveform, 0., 0., 1., 1.); })
-      ctx.draw_waveform(waveform, left_pad, pad, draw_w(), h - 2. * pad);
+      ctx.draw_waveform(waveform, left_pad, y0, draw_w(), wave_h);
 
     if(has_sound())
     {
       const double x0 = win_x0();
       const double x1 = win_x1();
       ctx.begin_path();
-      ctx.draw_rect(x0, pad, x1 - x0, h - 2. * pad);
+      ctx.draw_rect(x0, y0, x1 - x0, wave_h);
       auto win = ctx.to_rgba(halp::colors::editable_value_mid);
       win.a = 60;
       ctx.set_fill_color(win);
       ctx.fill();
       ctx.begin_path();
-      ctx.draw_line(x0, pad, x0, h - pad);
-      ctx.draw_line(x1, pad, x1, h - pad);
+      ctx.draw_line(x0, y0, x0, y1);
+      ctx.draw_line(x1, y0, x1, y1);
       ctx.set_stroke_color(halp::colors::editable_value_light);
       ctx.set_stroke_width(1.);
       ctx.stroke();
 
-      // Jitter ranges, both symmetric (±), as whiskers rather than fills so
-      // that the window's fill keeps its edges: position around the start
-      // edge at the top, duration around the end edge at the bottom. They
-      // assume a jitter range of 1 (the audio uses the real *Jitter Range*
-      // ports).
+      // Jitter ranges, both symmetric (±), as whiskers so that the window's
+      // fill keeps its edges: position around the start edge at the top,
+      // duration around the end edge at the bottom. A jitter j of range r
+      // spreads as N(0, r/4) * j: the whiskers span two deviations.
       auto whisker_color = ctx.to_rgba(halp::colors::editable_value_light);
       whisker_color.a = 200;
       auto whisker = [&](double xa, double xb, double y) {
@@ -368,10 +389,10 @@ struct WaveformItem
         ctx.set_stroke_width(1.);
         ctx.stroke();
       };
-      if(const double pj = pos_j / 2. * draw_w(); pj > 0.5)
-        whisker(x0 - pj, x0 + pj, pad + 5.);
-      if(const double dj = dur_j / 2. * draw_w(); dj > 0.5)
-        whisker(x1 - dj, x1 + dj, h - pad - 5.);
+      if(const double pj = pos_j * pos_j_r / 2. * draw_w(); pj > 0.5)
+        whisker(x0 - pj, x0 + pj, y0 + 5.);
+      if(const double dj = dur_j * dur_j_r / 2. * draw_w(); dj > 0.5)
+        whisker(x1 - dj, x1 + dj, y1 - 5.);
 
       // One bar per playing grain, fading with the grain's window
       auto head = ctx.to_rgba(halp::colors::runtime_value_light);
@@ -382,28 +403,41 @@ struct WaveformItem
         head.a = uint8_t(64 + heads.amp[i] * 191 / 255);
         ctx.begin_path();
         ctx.set_stroke_color(head);
-        ctx.move_to(px, pad);
-        ctx.line_to(px, h - pad);
+        ctx.move_to(px, y0);
+        ctx.line_to(px, y1);
         ctx.stroke();
       }
     }
-
-    char label[256];
-    if(!name.empty() && status == halp::sound_status::failed)
-      std::snprintf(label, sizeof(label), "%s  (cannot be decoded)", name.c_str());
-    else if(!name.empty() && status != halp::sound_status::ready)
-      std::snprintf(label, sizeof(label), "%s  (loading)", name.c_str());
-    else if(!name.empty() && waveform.duration > 0.)
-      std::snprintf(
-          label, sizeof(label), "%s  (%.2f s)", name.c_str(), waveform.duration);
-    else if(!name.empty())
-      std::snprintf(label, sizeof(label), "%s", name.c_str());
     else
-      std::snprintf(label, sizeof(label), "load a sound above");
+    {
+      ctx.begin_path();
+      ctx.set_fill_color(halp::colors::mid);
+      ctx.set_font_size(9.);
+      ctx.draw_text(
+          left_pad + 8., y0 + wave_h / 2. + 3.,
+          folder_mode ? "Drop a folder of sounds, or click to choose one"
+                      : "Drop a sound file, or click to choose one");
+      ctx.fill();
+    }
+
+    // Header: name, length, channels; or why there is no waveform
+    char label[300];
+    if(name.empty())
+      label[0] = 0;
+    else if(status == halp::sound_status::failed)
+      std::snprintf(label, sizeof(label), "%s · cannot be decoded", name.c_str());
+    else if(status != halp::sound_status::ready)
+      std::snprintf(label, sizeof(label), "%s · loading", name.c_str());
+    else if(waveform.duration > 0. && waveform.channels > 0)
+      std::snprintf(
+          label, sizeof(label), "%s · %.2f s · %d ch", name.c_str(), waveform.duration,
+          waveform.channels);
+    else
+      std::snprintf(label, sizeof(label), "%s", name.c_str());
     ctx.begin_path();
     ctx.set_fill_color(halp::colors::lighter);
     ctx.set_font_size(9.);
-    ctx.draw_text(left_pad + 3., pad + 12., label);
+    ctx.draw_text(left_pad + 4., pad + 11., label);
     ctx.fill();
   }
 
@@ -421,8 +455,24 @@ struct WaveformItem
 
   bool mouse_press(double x, double y)
   {
+    // No sound: choose one
     if(!has_sound())
-      return false; // no sound: nothing to manipulate
+    {
+      if(folder_mode)
+      {
+        const auto dir = QFileDialog::getExistingDirectory(nullptr, "Folder of sounds");
+        if(!dir.isEmpty() && set_folder)
+          set_folder(dir.toStdString());
+      }
+      else
+      {
+        const auto file = QFileDialog::getOpenFileName(
+            nullptr, "Sound file", {}, PathChip<false>::sound_file_filter());
+        if(!file.isEmpty() && set_sound)
+          set_sound(file.toStdString());
+      }
+      return true;
+    }
 
     m_press_x = x;
     m_press_y = y;
@@ -455,7 +505,7 @@ struct WaveformItem
     if(!m_dragging)
       return;
     const float dxn = float((x - m_press_x) / draw_w());
-    const float dyn = float((m_press_y - y) / (height() - 2. * pad));
+    const float dyn = float((m_press_y - y) / (bottom() - top()));
     float new_pos = m_pos0 + dxn;
     switch(m_zone)
     {
@@ -489,22 +539,8 @@ struct WaveformItem
   }
 };
 
-// Small static text label with a controllable baseline (a halp::label's
-// vertical placement can't be nudged). Used for "win modes".
-struct WinModesLabel
-{
-  static constexpr double width() { return 58.; }
-  static constexpr double height() { return 24.; }
-  void paint(auto ctx)
-  {
-    ctx.begin_path();
-    ctx.set_fill_color(halp::colors::mid);
-    ctx.set_font_size(9.);
-    ctx.draw_text(2., 18., "win modes");
-    ctx.fill();
-  }
-};
-
+// In the layout of the other synthesizers of score: titled sections, compact
+// knobs and dropdowns, the visual editors next to the controls they edit.
 struct Granola::ui
 {
   using enum halp::colors;
@@ -512,163 +548,176 @@ struct Granola::ui
 
   halp_meta(name, "Main")
   halp_meta(layout, vbox)
-  halp_meta(background, background_darker)
-  halp::label title{"Granulator"};
+  halp_meta(background, background_dark)
 
-  // The Sound port and pos/dur/their jitters as dot+label chips. The soundfile
-  // chooser stays in the inspector (load there); the panel just shows the dot.
-  // The Sound port and pos/dur/their jitters as dot+label chips in one row.
-  struct
+  // Named structs down to the source pages: they hold a static member.
+  struct top_t
   {
-    halp_meta(name, "Ports")
     halp_meta(layout, hbox)
-    halp_meta(background, background_dark)
-    halp::custom_control<PortDotValue<std::string, 40>, &ins::sound> sound{
-        {.label = "sound"}};
-    halp::custom_control<PortDotValue<float, 60>, &ins::pos> position{
-        {.label = "position"}};
-    halp::custom_control<PortDotValue<float, 60>, &ins::pos_j> pos_jit{
-        {.label = "± deviation"}};
-    halp::custom_control<PortDotValue<float, 60>, &ins::dur> duration{
-        {.label = "duration"}};
-    halp::custom_control<PortDotValue<float, 60>, &ins::dur_j> dur_jit{
-        {.label = "± deviation"}};
-  } ports;
 
-  struct
-  {
-    halp_meta(name, "Wave")
-    halp_meta(layout, hbox)
-    halp_meta(background, background_darker)
-    halp::custom_actions_item<WaveformItem> waveform;
-  } wave_box;
-
-  // Where the sound comes from (below the waveform): the Sound file above, or
-  // a folder of sounds, with a page of controls per source. Named structs: the
-  // pages hold a static member.
-  struct source_box_t
-  {
-    halp_meta(name, "Source")
-    halp_meta(layout, hbox)
-    halp_meta(background, background_dark)
-    struct : halp::control<&ins::source>
+    // Where the sound comes from, and the sound with its grains over it
+    struct sound_t
     {
-      std::function<void(control_value_type)> set;
-    } source;
+      halp_meta(name, "Sound")
+      halp_meta(layout, section)
+      halp_meta(background, background_mid)
 
-    struct pages_t
-    {
-      halp_meta(name, "Source pages")
-      halp_meta(layout, tabs)
-      halp_flag(hide_tabs);
-      static constexpr auto model = &ins::source;
-      struct
+      struct source_t
       {
-        halp_meta(name, "File")
         halp_meta(layout, hbox)
-        halp::label hint{"the sound file above, or drop one on the waveform"};
-      } file;
-      struct
-      {
-        halp_meta(name, "Folder")
-        halp_meta(layout, hbox)
-        struct : halp::control<&ins::sounds>
-        {
-          std::function<void(control_value_type)> set;
-        } folder;
-        struct : halp::control<&ins::sound_file>
-        {
-          std::function<void(control_value_type)> set;
-        } sound_file;
-        halp::item<&ins::random> random;
-      } folder;
-    } pages;
-  } source_box;
+        settable<&ins::source, dropdown_as("Source")> source;
 
-  struct
-  {
-    halp_meta(name, "Controls")
-    halp_meta(layout, hbox)
-    halp_meta(background, background_dark)
+        struct pages_t
+        {
+          halp_meta(layout, tabs)
+          halp_flag(hide_tabs);
+          static constexpr auto model = &ins::source;
+          struct
+          {
+            halp_meta(name, "File")
+            halp_meta(layout, hbox)
+            halp::custom_control<PathChip<false>, &ins::sound> file;
+          } file;
+          struct
+          {
+            halp_meta(name, "Folder")
+            halp_meta(layout, hbox)
+            halp::custom_control<PathChip<true>, &ins::sounds> folder;
+            settable<&ins::sound_file, dropdown_as("File")> sound_file;
+            halp::item<&ins::random> random;
+          } folder;
+        } pages;
+      } source;
+
+      halp::custom_actions_item<WaveformItem> waveform;
+    } sound;
+
+    // The shape of each grain
     struct
     {
-      halp_meta(name, "Params")
-      halp_meta(layout, vbox)
-      halp_meta(background, background_dark)
+      halp_meta(name, "Window")
+      halp_meta(layout, section)
+      halp_meta(background, background_mid)
+      halp::control<&ins::window_mode, dropdown_as("Shape")> shape;
+      halp::custom_control<WindowShapeItem, &ins::win_coefs> pad;
+    } window;
+  } top;
+
+  // In signal order: where and how long grains are and how many, their pitch,
+  // their level, and what plays them
+  struct
+  {
+    halp_meta(layout, hbox)
+
+    struct
+    {
+      halp_meta(name, "Grain")
+      halp_meta(layout, section)
+      halp_meta(background, background_mid)
       struct
       {
-        halp_meta(name, "Gain Controls")
-        halp_meta(layout, hbox)
-        halp_meta(background, background_dark)
-        halp::item<&ins::gain> gain;
-        halp::item<&ins::gain_j> gain_j;
-      } gain_box;
+        halp_meta(layout, grid)
+        halp_meta(columns, 3)
+        settable<&ins::pos, small_knob_as("Position")> position;
+        settable<&ins::pos_j, small_knob_as("Jitter")> pos_jitter;
+        halp::control<&ins::pos_j_r, small_knob_as("Range")> pos_range;
+        settable<&ins::dur, small_knob_as("Duration")> duration;
+        settable<&ins::dur_j, small_knob_as("Jitter")> dur_jitter;
+        halp::control<&ins::dur_j_r, small_knob_as("Range")> dur_range;
+        halp::item<&ins::density, small_knob_as("Density")> density;
+        halp::item<&ins::dens_j, small_knob_as("Jitter")> dens_jitter;
+        halp::item<&ins::dens_j_r, small_knob_as("Range")> dens_range;
+      } knobs;
+    } grain;
+
+    struct
+    {
+      halp_meta(name, "Pitch")
+      halp_meta(layout, section)
+      halp_meta(background, background_mid)
       struct
       {
-        halp_meta(name, "Density Controls")
-        halp_meta(layout, hbox)
-        halp_meta(background, background_dark)
-        halp::item<&ins::density> density;
-        halp::item<&ins::dens_j> dens_j;
-      } dens_box;
+        halp_meta(layout, grid)
+        halp_meta(columns, 3)
+        halp::item<&ins::rate, small_knob_as("Pitch")> pitch;
+        halp::item<&ins::rate_j, small_knob_as("Jitter")> jitter;
+        halp::item<&ins::rate_j_r, small_knob_as("Range")> range;
+      } knobs;
+      halp::item<&ins::reverse> reverse;
+    } pitch;
+
+    struct
+    {
+      halp_meta(name, "Output")
+      halp_meta(layout, section)
+      halp_meta(background, background_mid)
       struct
       {
-        halp_meta(name, "Pitch Controls")
-        halp_meta(layout, hbox)
-        halp_meta(background, background_dark)
-        halp::item<&ins::rate> rate;
-        halp::item<&ins::rate_j> rate_j;
-      } rate_box;
+        halp_meta(layout, grid)
+        halp_meta(columns, 3)
+        halp::item<&ins::gain, small_knob_as("Gain")> gain;
+        halp::item<&ins::gain_j, small_knob_as("Jitter")> jitter;
+        halp::item<&ins::gain_j_r, small_knob_as("Range")> range;
+      } knobs;
       struct
       {
-        halp_meta(name, "Play")
         halp_meta(layout, hbox)
-        halp_meta(background, background_dark)
+        halp::item<&ins::src_channels, halp::label_as("Channels")> channels;
+        halp::item<&ins::channel_offset, halp::label_as("Offset")> offset;
+      } channels;
+    } output;
+
+    struct
+    {
+      halp_meta(name, "Play")
+      halp_meta(layout, section)
+      halp_meta(background, background_mid)
+      struct
+      {
+        halp_meta(layout, hbox)
         halp::item<&ins::playing> playing;
-        halp::item<&ins::trig> trig;
-      } play_box;
-    } params_box;
-    struct
-    {
-      halp_meta(name, "Shape")
-      halp_meta(layout, vbox)
-      halp_meta(background, background_dark)
-      // Reverse to the left of the window-mode selector.
+        halp::item<&ins::trig> trigger;
+        halp::item<&ins::midi_gate, halp::label_as("MIDI")> midi;
+      } transport;
       struct
       {
-        halp_meta(name, "Win")
         halp_meta(layout, hbox)
-        halp_meta(background, background_dark)
-        halp::item<&ins::reverse> reverse;
-        halp::custom_control<WindowModeItem, &ins::window_mode> window_mode;
-        halp::custom_actions_item<WinModesLabel> wm_label;
-      } wm_box;
-      halp::custom_control<WindowShapeItem, &ins::win_coefs> win_coefs;
-    } shape_box;
-  } controls;
+        halp::item<&ins::num_voices, halp::label_as("Voices")> voices;
+        halp::item<&ins::interp_type, dropdown_as("Interpolation")> interpolation;
+        halp::item<&ins::loopmode> loop;
+      } engine;
+    } play;
+  } params;
 
   void on_control_update()
   {
-    auto& sb = controls.shape_box;
-    sb.win_coefs.mode = int(sb.wm_box.window_mode.value);
-    if(sb.win_coefs.update)
-      sb.win_coefs.update();
-    if(sb.wm_box.window_mode.update)
-      sb.wm_box.window_mode.update();
+    auto& win = top.window;
+    win.pad.mode = int(win.shape.value);
+    if(win.pad.update)
+      win.pad.update();
 
-    auto& wf = wave_box.waveform;
-    wf.pos = ports.position.value;
-    wf.pos_j = ports.pos_jit.value;
-    wf.dur = ports.duration.value;
-    wf.dur_j = ports.dur_jit.value;
-    wf.sound_path = ports.sound.value;
+    auto& g = params.grain.knobs;
+    auto& src = top.sound.source;
+    auto& page = src.pages.folder;
+    auto& wf = top.sound.waveform;
+    wf.pos = g.position.value;
+    wf.pos_j = g.pos_jitter.value;
+    wf.pos_j_r = g.pos_range.value;
+    wf.dur = g.duration.value;
+    wf.dur_j = g.dur_jitter.value;
+    wf.dur_j_r = g.dur_range.value;
+    wf.sound_path = src.pages.file.file.value;
+    wf.folder_mode = from_folder();
     if(wf.update)
       wf.update();
+    // The chips paint their own value: they are not repainted with the layout
+    if(src.pages.file.file.update)
+      src.pages.file.file.update();
+    if(page.folder.update)
+      page.folder.update();
 
     // Switching to the folder the first time: the Sound file's folder, with
     // that file picked, rather than an empty folder.
-    auto& src = source_box;
-    auto& page = src.pages.folder;
     const bool folder = from_folder();
     if(folder && !wf.was_folder && page.folder.value.empty() && !wf.sound_path.empty())
     {
@@ -699,7 +748,9 @@ struct Granola::ui
              || !QFileInfo::exists(dir + "/" + QString::fromStdString(picked))))
       {
         QStringList filters;
-        for(const auto& ext : QString::fromUtf8(sound_extensions.data(), qsizetype(sound_extensions.size()))
+        for(const auto& ext : QString::fromUtf8(
+                                  sound_extensions.data(),
+                                  qsizetype(sound_extensions.size()))
                                   .split(' ', Qt::SkipEmptyParts))
           filters.push_back("*." + ext);
         const auto files = QDir{dir}.entryList(filters, QDir::Files, QDir::Name);
@@ -713,15 +764,15 @@ struct Granola::ui
 
   bool from_folder() const noexcept
   {
-    using source_type = std::decay_t<decltype(source_box.source.value)>;
-    return source_box.source.value == source_type::Folder;
+    using source_type = std::decay_t<decltype(top.sound.source.source.value)>;
+    return top.sound.source.source.value == source_type::Folder;
   }
 
   // The waveform shows the Sound file, or the file picked in the folder
   void show_current_sound()
   {
-    auto& wf = wave_box.waveform;
-    auto& page = source_box.pages.folder;
+    auto& wf = top.sound.waveform;
+    auto& page = top.sound.source.pages.folder;
     std::string file = wf.sound_path;
     if(from_folder())
     {
@@ -737,7 +788,7 @@ struct Granola::ui
   // Stopped: the picked file again, rather than the last one played
   void stop()
   {
-    wave_box.waveform.playing_file.clear();
+    top.sound.waveform.playing_file.clear();
     show_current_sound();
   }
 
@@ -747,38 +798,40 @@ struct Granola::ui
     std::function<void(ui_to_processor)> send_message;
     void init(ui& self)
     {
-      // Wire the waveform gestures to the ports' document values. The chip
-      // items' `set` hooks are filled by the layout builder (after init).
-      auto& wf = self.wave_box.waveform;
-      wf.set_pos = [&self](float v) {
-        if(auto& c = self.ports.position; c.set)
-          c.set(v);
+      // The waveform's gestures and drops edit the ports' document values. The
+      // controls' `set` hooks are filled by the layout builder (after init).
+      auto& wf = self.top.sound.waveform;
+      auto& g = self.params.grain.knobs;
+      wf.set_pos = [&g](float v) {
+        if(g.position.set)
+          g.position.set(v);
       };
-      wf.set_pos_j = [&self](float v) {
-        if(auto& c = self.ports.pos_jit; c.set)
-          c.set(v);
+      wf.set_pos_j = [&g](float v) {
+        if(g.pos_jitter.set)
+          g.pos_jitter.set(v);
       };
-      wf.set_dur = [&self](float v) {
-        if(auto& c = self.ports.duration; c.set)
-          c.set(v);
+      wf.set_dur = [&g](float v) {
+        if(g.duration.set)
+          g.duration.set(v);
       };
-      wf.set_dur_j = [&self](float v) {
-        if(auto& c = self.ports.dur_jit; c.set)
-          c.set(v);
+      wf.set_dur_j = [&g](float v) {
+        if(g.dur_jitter.set)
+          g.dur_jitter.set(v);
       };
       // Drop onto the waveform: a file plays it, a folder plays its files
-      using source_type = std::decay_t<decltype(self.source_box.source.value)>;
-      wf.set_sound = [&self](std::string v) {
-        if(auto& c = self.ports.sound; c.set)
+      auto& src = self.top.sound.source;
+      using source_type = std::decay_t<decltype(src.source.value)>;
+      wf.set_sound = [&src](std::string v) {
+        if(auto& c = src.pages.file.file; c.set)
           c.set(std::move(v));
-        if(auto& c = self.source_box.source; c.set)
-          c.set(source_type::File);
+        if(src.source.set)
+          src.source.set(source_type::File);
       };
-      wf.set_folder = [&self](std::string v) {
-        if(auto& c = self.source_box.pages.folder.folder; c.set)
+      wf.set_folder = [&src](std::string v) {
+        if(auto& c = src.pages.folder.folder; c.set)
           c.set(std::move(v));
-        if(auto& c = self.source_box.source; c.set)
-          c.set(source_type::Folder);
+        if(src.source.set)
+          src.source.set(source_type::Folder);
       };
       // A late-created panel asks the processor to resend the current sound.
       send_message(ui_to_processor{});
@@ -793,7 +846,7 @@ struct Granola::ui
 
     static void process(ui& self, const playheads& heads)
     {
-      auto& wf = self.wave_box.waveform;
+      auto& wf = self.top.sound.waveform;
       wf.heads = heads;
       if(wf.update)
         wf.update();
@@ -801,7 +854,7 @@ struct Granola::ui
 
     static void process(ui& self, const current_sound& cs)
     {
-      auto& wf = self.wave_box.waveform;
+      auto& wf = self.top.sound.waveform;
       wf.status = cs.status;
       wf.playing_file = cs.index >= 0 ? std::string{cs.name} : std::string{};
       self.show_current_sound();
