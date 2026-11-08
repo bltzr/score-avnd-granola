@@ -90,6 +90,18 @@ void Granola::clear()
     grain.reset();
 }
 
+int Granola::output_channels(int sound_channels) const noexcept
+{
+  const int read = inputs.src_channels <= 0
+                       ? std::min(sound_channels, NCHAN)
+                       : std::clamp((int)inputs.src_channels, 1, std::max(sound_channels, 1));
+  const int n = inputs.out_channels <= 0
+                    ? read
+                    : std::min((int)inputs.out_channels, max_outputs);
+  // Spread needs two channels, even for a mono sound
+  return inputs.spread > 0.f ? std::max(n, 2) : n;
+}
+
 void Granola::send_playheads(int frames, const GrainSource& cur)
 {
   if(!send_message)
@@ -198,23 +210,17 @@ void Granola::operator()(tick t)
   const int n_channels = inputs.src_channels <= 0
                              ? std::min((int)cur.channels, NCHAN)
                              : CLAMP(inputs.src_channels, 1, (int)cur.channels);
-  const int n_out = inputs.out_channels <= 0
-                        ? n_channels
-                        : std::min((int)inputs.out_channels, max_outputs);
   const int ch_offset
       = CLAMP(inputs.channel_offset, 0, (int)cur.channels - n_channels);
 
-  // request_channels() bumps outputs.audio.channels now but the buffers only
-  // grow next tick, so only touch channels already backed this tick.
+  // request_channels() changes outputs.audio.channels now but the buffers
+  // follow next tick, so only touch channels backed this tick: the fewer of
+  // the two. As many as asked for, more or fewer.
   const int live_out_channels = (int)outputs.audio.channels;
-  // Spread needs two channels, even for a mono sound
-  const int wanted_channels = inputs.spread > 0.f ? std::max(n_out, 2) : n_out;
-  if(live_out_channels < wanted_channels && outputs.audio.request_channels)
+  const int wanted_channels = output_channels((int)cur.channels);
+  if(live_out_channels != wanted_channels && outputs.audio.request_channels)
     outputs.audio.request_channels(wanted_channels);
-  // The outputs the grains play in: a single channel in all of them, as
-  // before Outputs
-  const int out_channels
-      = n_channels == 1 ? live_out_channels : std::min(wanted_channels, live_out_channels);
+  const int out_channels = std::min(wanted_channels, live_out_channels);
 
   boost::container::static_vector<double, NCHAN> ampvec(n_channels, 1.);
   for(int i = 0; i < n_channels; i++)
@@ -462,19 +468,32 @@ void Granola::operator()(tick t)
           const int places = out_channels;
           auto& pan = grains[i].m_pan;
           pan = {};
-          if(inputs.spread > 0.f && places > 1)
+          // 0: in all of them alike; 1: between two neighbouring ones (1-D
+          // VBAP); 2: in one of them
+          if(const float sp = std::clamp(inputs.spread.value, 0.f, 2.f); sp > 0.f && places > 1)
           {
-            const float x = std::uniform_real_distribution<float>(
-                0.f, float(places - 1))(rd);
+            // A loudspeaker, each as likely, and a place around it
+            const float u = std::uniform_real_distribution<float>(0.f, float(places))(rd);
+            const int speaker = std::min(int(u), places - 1);
+            const float x = std::clamp(u - 0.5f, 0.f, float(places - 1));
             const int a = std::min(int(x), places - 2);
             const float t = x - a;
             // Between a and a + 1: 1 at the centre, as the channels are now
             constexpr float sqrt2 = std::numbers::sqrt2_v<float>;
             constexpr float half_pi = std::numbers::pi_v<float> / 2.f;
-            pan.all = 1.f - inputs.spread;
+            float wa = std::min(1.f, sqrt2 * std::cos(t * half_pi));
+            float wb = std::min(1.f, sqrt2 * std::sin(t * half_pi));
+            // Past 1, towards the loudspeaker alone, which is a or a + 1
+            if(const float one = sp - 1.f; one > 0.f)
+            {
+              wa = (1.f - one) * wa + one * float(speaker == a);
+              wb = (1.f - one) * wb + one * float(speaker == a + 1);
+            }
+            const float pair = std::min(sp, 1.f);
+            pan.all = 1.f - pair;
             pan.a = a;
-            pan.at_a = inputs.spread * std::min(1.f, sqrt2 * std::cos(t * half_pi));
-            pan.at_b = inputs.spread * std::min(1.f, sqrt2 * std::sin(t * half_pi));
+            pan.at_a = pair * wa;
+            pan.at_b = pair * wb;
           }
           alloccheck = true;
         }
