@@ -15,14 +15,14 @@ void Granola::prepare(setup info)
   ms2samps = samplerate * 0.001;
 
   // create the appropriate number of grains:
-  grains.reserve(256);
+  grains.reserve(max_grains);
   resize(inputs.num_voices);
 }
 
 void Granola::resize(int n)
 {
   buf_soft_lock = true; /// TODO: use a mutex or something?
-  grains.resize(n);
+  grains.resize(std::clamp(n, 0, max_grains));
   clear();
   buf_soft_lock = false;
 }
@@ -39,7 +39,9 @@ void Granola::operator()(tick t)
   if(!inputs.sound || inputs.sound.channels() == 0)
     return;
 
-  const int n_channels = CLAMP(inputs.src_channels, 1, inputs.sound.channels());
+  // No more channels than a grain holds
+  const int n_channels
+      = std::min(CLAMP(inputs.src_channels, 1, inputs.sound.channels()), NCHAN);
   const int ch_offset
       = CLAMP(inputs.channel_offset, 0, inputs.sound.channels() - n_channels);
 
@@ -135,7 +137,7 @@ void Granola::operator()(tick t)
       outputs.audio.samples[i][k] = 0.;
     }
 
-    for(long i = 0; i < inputs.num_voices; i++)
+    for(long i = 0; i < std::min<long>(inputs.num_voices, grains.size()); i++)
     {
       const bool should_spawn = midi_active ? (midi_pending_voice >= 0)
                                             : trigger;
@@ -199,7 +201,8 @@ void Granola::operator()(tick t)
         std::span<double> outSamps{
             grains[i].incr(inputs.sound, (long)inputs.interp_type.value)};
 
-        for(int j = 0; j < n_channels; j++)
+        // The outputs the host made: the channels asked for come next tick
+        for(int j = 0; j < std::min<int>(n_channels, outputs.audio.channels); j++)
         {
           outputs.audio.samples[j][k] += outSamps[j] * inputs.gain;
         }

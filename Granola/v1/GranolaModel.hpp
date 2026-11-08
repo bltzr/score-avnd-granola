@@ -15,6 +15,7 @@
 #include <libremidi/message.hpp>
 #include <rnd/random.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -40,7 +41,8 @@ public:
   halp_meta(c_name, "granola")
   halp_meta(uuid, "38F9684D-54A6-4F48-91E4-3B251F0956EA")
 
-  //static const int NCHAN{8};
+  // The most voices a cable can ask for: as many as prepare() makes room for
+  static constexpr int max_grains = 4096;
 
   struct ins
   {
@@ -97,7 +99,7 @@ public:
     } channel_offset;
     struct : halp::spinbox_i32<"Max Voices", halp::range{0, 256, 128}>
     {
-      void update(Granola& self) { self.grains.resize(value); }
+      void update(Granola& self) { self.grains.resize(std::clamp(value, 0, max_grains)); }
     } num_voices;
     struct : halp::toggle<"Continuous", halp::toggle_setup{.init = true}> {
       void update(Granola& self)

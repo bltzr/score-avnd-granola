@@ -8,6 +8,7 @@
 
 #include <catch2/catch_all.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -179,6 +180,66 @@ TEST_CASE("Granola (v1): NaN or infinite controls, as cables give them: no crash
         if(g.m_active)
           CHECK(g.m_max_count < 10 * RigV1::rate);
     }
+}
+
+TEST_CASE("Granola (v1): the lowest Pitch, extreme Durations, Max Voices and channels from cables", "[v1]")
+{
+  // The knob's lowest Pitch makes grains of billions of samples: their
+  // window is not stored, the grain holds what computes it
+  static_assert(sizeof(GranolaV1::GranuGrain) < 4096);
+  using V1 = GranolaV1::Granola;
+  constexpr float lowest_pitch = 0.000001f;
+  for(float dur : {1e-8f, 0.05f, 1.f, 1e30f})
+    for(bool loop : {false, true})
+    {
+      CAPTURE(dur, loop);
+      RigV1 r;
+      auto& in = r.g->inputs;
+      in.rate.value = lowest_pitch;
+      in.dur.value = dur;
+      in.dur_j.value = 1.f;
+      in.dur_j_r.value = 1.f;
+      in.loopmode.value = loop;
+      in.density.value = 256.f;
+      r.start();
+      for(int t = 0; t < 20; t++)
+        r.tick();
+      int long_grains = 0;
+      for(auto& g : r.g->grains)
+        if(g.m_active && g.m_max_count > 1e8)
+          long_grains++;
+      // the long grains still start and play, at their speed
+      if(dur >= 0.05f)
+        CHECK(long_grains > 0);
+    }
+
+  // Max Voices from a cable: at most V1::max_grains, none below 0
+  for(int voices : {-5, 0, 300, 1 << 30})
+  {
+    CAPTURE(voices);
+    RigV1 r;
+    r.start();
+    r.g->inputs.num_voices.value = voices;
+    r.g->inputs.num_voices.update(*r.g);
+    for(int t = 0; t < 5; t++)
+      r.tick();
+    CHECK(r.g->grains.size() == std::size_t(std::clamp(voices, 0, V1::max_grains)));
+  }
+
+  // More channels read than a grain holds, and than the outputs have yet
+  std::vector<std::vector<float>> sound(12, std::vector<float>(4800, 0.1f));
+  std::vector<const float*> ptrs;
+  for(auto& c : sound)
+    ptrs.push_back(c.data());
+  RigV1 r;
+  r.g->inputs.sound.soundfile.data = ptrs.data();
+  r.g->inputs.sound.soundfile.channels = 12;
+  r.g->inputs.sound.soundfile.frames = 4800;
+  r.g->inputs.src_channels.value = 12;
+  r.start();
+  for(int t = 0; t < 20; t++)
+    r.tick();
+  CHECK(r.g->outputs.audio.channels == 2);
 }
 
 #if defined(__GLIBCXX__)

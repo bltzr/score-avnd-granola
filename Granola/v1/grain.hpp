@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bit>
+#include <cstdint>
 #include <vector>
 //#include "buffer_proxy.hpp"
 #include "utils.hpp"
@@ -38,8 +39,27 @@ struct GranuGrain
   boost::container::static_vector<double, 2> m_shape;
   boost::container::static_vector<double, NCHAN> m_chan_amp;
 
-  boost::dynamic_bitset<> m_window_update;
-  boost::container::vector<double> m_window;
+  // The window's values as the grains of this voice computed them first,
+  // since its length, type or shape last changed: a grain of the same length
+  // reads the values of the grains before it, which may have had another
+  // pitch or norm. Kept as what computed them rather than as the values, so
+  // that no length of grain allocates: a grain fills them from its start, so
+  // they are a prefix, in parts of the grains that first reached them.
+  struct window_owner
+  {
+    long end{};        // the part [previous end, end) is this one's
+    uint64_t grain{};  // which grain of this voice
+    double incr{}, norm{}, shape_x{}, shape_y{};
+    long type{}, max_count{};
+  };
+  // Parts past these, from a prepare() during a grain every time, are the
+  // last one's
+  static constexpr int max_window_owners = 16;
+  window_owner m_owners[max_window_owners]{};
+  int m_owner_count{};
+  long m_window_filled{};
+  uint64_t m_grain{};
+  double compute_window(long phase_counter, const window_owner& o) const noexcept;
 
   long m_buf_chans = 1;
   double m_buf_len = 0;
