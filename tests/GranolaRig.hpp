@@ -55,6 +55,8 @@ struct Rig
         scanning = h->scanning;
       }
     };
+    // As score does: the controls' update() first, then prepare()
+    g->inputs.num_voices.update(*g);
     g->prepare({.rate = double(rate), .frames = F});
   }
 
