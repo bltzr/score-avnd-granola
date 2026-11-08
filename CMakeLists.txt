@@ -48,6 +48,25 @@ if(SCORE_TESTING AND TARGET Catch2::Catch2WithMain AND NOT SCORE_FAST_DEV_BUILD)
   target_include_directories(score_addon_granola_dsp_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(score_addon_granola_dsp_test PRIVATE Catch2::Catch2WithMain score_plugin_avnd)
   add_test(NAME score_addon_granola_dsp_test COMMAND score_addon_granola_dsp_test)
+
+  add_executable(score_addon_granola_fuzz_test tests/GranolaFuzzTest.cpp ${GRANOLA_DSP_SOURCES})
+  target_include_directories(score_addon_granola_fuzz_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(score_addon_granola_fuzz_test PRIVATE Catch2::Catch2WithMain score_plugin_avnd)
+  add_test(NAME score_addon_granola_fuzz_test COMMAND score_addon_granola_fuzz_test)
+
+  # Granola in score: its panel used while it plays (score's test helpers)
+  if(COMMAND score_add_test AND TARGET score_plugin_engine AND TARGET score_plugin_scenario)
+    score_add_test(score_addon_granola_app_test
+      SOURCES tests/GranolaAppTest.cpp ${GRANOLA_DSP_SOURCES}
+      APP
+      PLUGINS score_plugin_avnd score_plugin_engine score_plugin_scenario score_lib_process
+              score_plugin_media score_plugin_deviceexplorer)
+    target_include_directories(score_addon_granola_app_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Defined after the addons: its name is resolved when generating
+    target_link_libraries(score_addon_granola_app_test PRIVATE score_test_fixtures)
+    set_tests_properties(score_addon_granola_app_test PROPERTIES
+      TIMEOUT 600 LABELS "integration;granola")
+  endif()
 endif()
 
 # CPU time of some patches: build it in a release configuration,
