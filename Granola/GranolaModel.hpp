@@ -73,9 +73,8 @@ public:
       halp_flag(waveform);
       void update(Granola& self)
       {
-        self.outputs.audio.request_channels(this->channels());
-        //if (self.inputs.playing) self.trigger = true;
-        //qDebug() << "sound" << self.trigger;
+        if(self.outputs.audio.request_channels)
+          self.outputs.audio.request_channels(self.output_channels(this->channels()));
       }
     } sound;
     //halp::soundfile_port<"Window", double> win; // not supported yet
@@ -108,9 +107,10 @@ public:
     {
       static constexpr std::string_view former_name() noexcept { return "Duration Jitter"; }
     } dur_j;
-    // Each grain somewhere else between the output channels (Output
-    // Channels): 0 in all of them alike, 1 anywhere
-    struct : halp::hslider_f32<"Spread", halp::range{0., 1., 0.}>
+    // Each grain somewhere among the output channels (Output Channels): 0 in
+    // all of them alike, 1 between two neighbouring ones (1-D VBAP), 2 in a
+    // single one
+    struct : halp::hslider_f32<"Spread", halp::range{0., 2., 0.}>
     {
       static constexpr std::string_view former_name() noexcept { return "Stereo Spread"; }
       static float upgrade_value(float) { return 0.f; }
@@ -338,6 +338,9 @@ public:
   void prepare(setup info);
 
   void resize(int n);
+  //! The outputs for a sound of \p sound_channels: Output Channels, else as
+  //! many as Channels reads of it; two at least with Spread
+  int output_channels(int sound_channels) const noexcept;
   //! Stops the grains past \p n
   void set_voice_count(int n);
   void clear();
