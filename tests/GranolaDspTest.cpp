@@ -621,3 +621,33 @@ TEST_CASE("The panel lists a folder in the host's order, and reads indices as ha
   CHECK(!halp::folder_index("-1"));
   CHECK(!halp::folder_index("nan"));
 }
+
+TEST_CASE("Max Voices set before prepare(), as score does: a sound dropped plays", "[safety]")
+{
+  for(int voices : {1, 128, 256})
+  {
+    CAPTURE(voices);
+    auto g = std::make_unique<Granola::Granola>();
+    g->inputs.num_voices.value = voices;
+    g->inputs.num_voices.update(*g);
+    std::vector<double> o0(Rig::F), o1(Rig::F);
+    double* outs[2] = {o0.data(), o1.data()};
+    g->outputs.audio.samples = outs;
+    g->outputs.audio.channels = 2;
+    // Before prepare(): silence, no crash
+    (*g)({.frames = Rig::F});
+    g->prepare({.rate = double(Rig::rate), .frames = Rig::F});
+    REQUIRE(g->free_from.size() == g->grains.size());
+
+    // Then a sound is dropped
+    std::vector<float> sound(Rig::rate, 0.25f);
+    const float* chans[1] = {sound.data()};
+    g->inputs.sound.soundfile.data = chans;
+    g->inputs.sound.soundfile.frames = Rig::rate;
+    g->inputs.sound.soundfile.channels = 1;
+    g->inputs.density.value = 50.f;
+    for(int k = 0; k < 50; k++)
+      (*g)({.frames = Rig::F});
+    CHECK(g->grains_made > 0);
+  }
+}

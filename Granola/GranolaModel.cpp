@@ -21,7 +21,9 @@ void Granola::prepare(setup info)
   // Every grain Max Voices allows is made here, with its buffers: neither
   // adding nor removing voices allocates or frees on the audio thread. The
   // host prepares again when the outputs change: the grains then play on.
-  if(grains.size() != std::size_t(max_voices))
+  // The grains may be made already, by set_voice_count() which the host
+  // calls first: what goes with them too
+  if(grains.size() != std::size_t(max_voices) || free_from.size() != grains.size())
     resize(max_voices);
   if(window_tables.size() != std::size_t(window_tables_count))
     window_tables.resize(window_tables_count);
@@ -85,7 +87,7 @@ void Granola::set_voice_count(int n)
 {
   // Before prepare(), e.g. in the copy of the object the UI keeps
   if(grains.size() < std::size_t(max_voices))
-    grains.resize(max_voices);
+    resize(max_voices);
 
   // The grains of the voices past the count fade out in 2 ms: no click
   n = std::clamp(n, 0, max_voices);
@@ -650,7 +652,9 @@ void Granola::operator()(tick t)
   int cur_index = -1;
   const GrainSource cur = current_source(from_folder, cur_index);
   notify_current_sound(cur_index, cur);
-  if(!cur)
+  // Nothing to play, e.g. a file of the folder being decoded; or not
+  // prepared, its buffers not made
+  if(!cur || scratch.empty() || free_from.size() != grains.size())
   {
     // Nothing to play, e.g. a file of the folder being decoded
     for(int j = 0; j < (int)outputs.audio.channels; j++)
