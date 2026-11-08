@@ -23,8 +23,7 @@ avnd_score_plugin_add(
     Granola/GranolaUi.hpp
     Granola/grain.hpp
     Granola/grain.cpp
-    Granola/utils.hpp
-    Granola/utils.cpp
+    Granola/Window.hpp
   TARGET granola
   MAIN_CLASS Granola
   NAMESPACE Granola
@@ -42,7 +41,6 @@ avnd_score_plugin_finalize(
 set(GRANOLA_DSP_SOURCES
   Granola/GranolaModel.cpp
   Granola/grain.cpp
-  Granola/utils.cpp
 )
 
 if(SCORE_TESTING AND TARGET Catch2::Catch2WithMain AND NOT SCORE_FAST_DEV_BUILD)

@@ -1,6 +1,11 @@
 // The processor: what each control does to the grains and the outputs.
 #include "GranolaRig.hpp"
 
+#include <score/tools/NaturalSort.hpp>
+
+#include <avnd/introspection/input.hpp>
+#include <avnd/wrappers/metadatas.hpp>
+
 #include <catch2/catch_all.hpp>
 
 #include <algorithm>
@@ -577,4 +582,42 @@ TEST_CASE("A Sound file loaded again stops the grains reading the old one", "[sa
   for(auto& g : r.g->grains)
     if(g.m_active)
       CHECK(g.m_source.data == ptrs.data());
+}
+
+TEST_CASE("The ports, in their order: documents restore them by it", "[ports]")
+{
+  // Add new ports at the end, and give a renamed one its former_name()
+  const std::vector<std::string_view> expected{
+      "Sound", "Position", "Position Deviation", "Scan", "Duration", "Duration Deviation",
+      "Spread", "Pitch", "Pitch Deviation", "Pitch Deviation in Semitones", "Reverse",
+      "Density", "Density Deviation", "Reverse Chance", "Gain", "Gain Deviation",
+      "Reserved", "Window coefs", "Interpolation mode", "Window mode", "Loop",
+      "Source Channels", "Channel Offset", "Max Voices", "Continuous", "Trigger",
+      "MIDI In", "listening to MIDI", "Source", "Sounds", "Sound in folder", "Random",
+      "Scan Across Sounds", "Sample Start", "Sample End", "Output Channels", "Scan Mode"};
+  std::vector<std::string_view> names;
+  Granola::Granola g;
+  avnd::input_introspection<Granola::Granola>::for_all(
+      g.inputs, [&]<typename F>(F&) { names.push_back(avnd::get_name<F>()); });
+  CHECK(names == expected);
+}
+
+TEST_CASE("The panel lists a folder in the host's order, and reads indices as halp", "[ui]")
+{
+  QStringList names{"b10.wav", "B2.wav", "a.wav", "b1.wav", "b02.wav", "c.wav"};
+  score::sortNaturally(names);
+  // Equal but for case and leading zeros: by their characters, B before b
+  CHECK(names == QStringList{"a.wav", "b1.wav", "B2.wav", "b02.wav", "b10.wav", "c.wav"});
+
+  for(std::string v : {"-1", "3", "3.7", "1e2", "inf", "nan", "x.wav", "", "2e10"})
+  {
+    CAPTURE(v);
+    halp::folder_combobox<"F", "Sounds", "wav"> combo;
+    combo.value = v;
+    CHECK(combo.index() == halp::folder_index(v));
+  }
+  CHECK(halp::folder_index("2e10") == std::numeric_limits<int>::max());
+  CHECK(halp::folder_index("inf") == std::numeric_limits<int>::max());
+  CHECK(!halp::folder_index("-1"));
+  CHECK(!halp::folder_index("nan"));
 }
