@@ -729,6 +729,8 @@ struct Granola::ui
       // waveform
       halp::item<&ins::sample_start, small_slider_as("Start")> sample_start;
       halp::item<&ins::sample_end, small_slider_as("End")> sample_end;
+      // Grains reaching the end of the region go on from its start
+      halp::item<&ins::loopmode, halp::label_as("Wrap at end")> wrap;
     } source;
 
     halp::custom_multi_control<
@@ -795,13 +797,16 @@ struct Granola::ui
         halp::item<&ins::gain, small_knob_as("Gain")> gain;
         halp::item<&ins::gain_j, small_slider_as("Deviation")> jitter;
         halp::item<&ins::spread, small_knob_as("Spread")> spread;
-        struct
-        {
-          halp_meta(layout, vbox)
-          halp::item<&ins::src_channels, halp::label_as("Channels")> channels;
-          halp::item<&ins::channel_offset, halp::label_as("Offset")> offset;
-        } channels;
+        // Spread places the grains among them
+        halp::item<&ins::out_channels, halp::label_as("Outputs")> outputs;
       } knobs;
+      // The sound's channels the grains read, from Offset
+      struct
+      {
+        halp_meta(layout, hbox)
+        halp::item<&ins::src_channels, halp::label_as("Channels")> channels;
+        halp::item<&ins::channel_offset, halp::label_as("Offset")> offset;
+      } channels;
     } output;
 
     // The shape of each grain
@@ -836,7 +841,6 @@ struct Granola::ui
         halp_meta(layout, hbox)
         halp::item<&ins::num_voices, halp::label_as("Voices")> voices;
         halp::item<&ins::interp_type, dropdown_as("Interpolation")> interpolation;
-        halp::item<&ins::loopmode> loop;
       } engine;
       // Position moving by itself; with the folder, across its files or not
       struct
