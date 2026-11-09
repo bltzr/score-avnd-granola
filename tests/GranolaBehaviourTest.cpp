@@ -551,10 +551,10 @@ TEST_CASE("Scan's play zone: the panel is told where Scan is, whichever files th
   for(std::size_t k = 0; k < s.heads.size(); k++)
   {
     const long at = s.heads_at[k];
-    auto near = std::ranges::min_element(segs, {}, [&](auto& g) { return std::abs(g.start - at); });
-    if(std::abs(near->start - at) > 480)
+    auto closest = std::ranges::min_element(segs, {}, [&](auto& g) { return std::abs(g.start - at); });
+    if(std::abs(closest->start - at) > 480)
       continue;
-    CHECK(s.heads[k].scan / G::playheads::pos_scale == Catch::Approx(near->rel).margin(0.01));
+    CHECK(s.heads[k].scan / G::playheads::pos_scale == Catch::Approx(closest->rel).margin(0.01));
     compared++;
   }
   CHECK(compared > 5);
