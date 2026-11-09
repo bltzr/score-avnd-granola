@@ -127,13 +127,13 @@ void Granola::relist_file_scans() noexcept
   file_scan_generation = sounds.generation();
   // Each file's place, from the file of its name nearest to its index
   const int n = std::min((int)sounds.size(), max_scan_files);
-  constexpr int near = 16;
+  constexpr int search_span = 16;
   for(int i = 0; i < n; i++)
   {
     const auto name = std::hash<std::string_view>{}(sounds[i].name);
     file_scan_name_next[i] = name;
     file_scan_next[i] = 0.;
-    for(int d = 0; d <= near; d++)
+    for(int d = 0; d <= search_span; d++)
     {
       if(i + d < file_scan_count && file_scan_name[i + d] == name)
       {
