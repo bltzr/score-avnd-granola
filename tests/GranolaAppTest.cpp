@@ -1054,3 +1054,75 @@ TEST_CASE("Output Channels 1 with a stereo sound: one channel out, at any Spread
     }
   });
 }
+
+namespace
+{
+using WaveformControl = std::remove_reference_t<decltype(std::declval<G::ui&>().sound.waveform)>;
+//! What the panel's waveform shows: the item it draws from
+struct PeekWaveform : oscr::CustomMultiControl<WaveformControl&>
+{
+  using oscr::CustomMultiControl<WaveformControl&>::impl;
+};
+}
+
+TEST_CASE("Duration sent to the port while it plays: the waveform shows it apart", "[app][ui]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QTemporaryDir dir;
+    write_wav(dir.filePath("a.wav"), 220, 48000, 1);
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    m.set("Sound", dir.filePath("a.wav").toStdString());
+    m.set("Duration", 0.2f);
+    m.play(10);
+
+    auto& dur_inlet = m.inlet("Duration");
+    int model_changes = 0, exec_changes = 0;
+    QObject::connect(&dur_inlet, &Process::ControlInlet::valueChanged, [&](auto&) { model_changes++; });
+    QObject::connect(&dur_inlet, &Process::ControlInlet::executionValueChanged, [&](auto&) { exec_changes++; });
+
+    auto* wf = static_cast<PeekWaveform*>(
+        dynamic_cast<oscr::CustomMultiControl<WaveformControl&>*>(m.waveform()));
+    REQUIRE(wf);
+    auto& item = wf->impl;
+    REQUIRE(!item.execution_window());
+
+    // The node's inlet of Duration, as a cable from another process fills it
+    const auto& inl = m.model->inlets();
+    const auto idx = std::distance(inl.begin(), std::ranges::find(inl, &dur_inlet));
+    auto* port = m.comp->node->root_inputs()[idx]->target<ossia::value_port>();
+    REQUIRE(port);
+    for(int k = 0; k < 20; k++)
+    {
+      port->write_value(0.6f, 0);
+      m.tick();
+      spin(5);
+    }
+    CAPTURE(model_changes, exec_changes);
+    CHECK(m.object().inputs.dur.value == Catch::Approx(0.6f));
+    REQUIRE(exec_changes > 0);
+
+    // The value the user set, in the model and in the item, is the same
+    CHECK(model_changes == 0);
+    CHECK(ossia::convert<float>(dur_inlet.value()) == Catch::Approx(0.2f));
+    CHECK(item.dur() == Catch::Approx(0.2f));
+    // What execution plays, apart
+    using WF = Granola::WaveformItem;
+    REQUIRE(item.execution_values[WF::DUR]);
+    CHECK(*item.execution_values[WF::DUR] == Catch::Approx(0.6));
+    const auto ew = item.execution_window();
+    REQUIRE(ew);
+    CHECK(ew->second - ew->first == Catch::Approx(0.6 * item.draw_w()).margin(1.));
+    CHECK(item.win_x1() - item.win_x0() == Catch::Approx(0.2 * item.draw_w()).margin(1.));
+
+    // Stopped: the window execution played is no longer shown
+    m.model->resetExecution();
+    spin(5);
+    CHECK(!item.execution_values[WF::DUR]);
+    CHECK(!item.execution_window());
+    CHECK(item.dur() == Catch::Approx(0.2f));
+  });
+}
+

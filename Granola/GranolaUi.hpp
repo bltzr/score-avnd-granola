@@ -342,6 +342,10 @@ struct WaveformItem
       && unit_range<&Granola::ins::pos_j>() && unit_range<&Granola::ins::dur_j>()
       && unit_range<&Granola::ins::sample_start>() && unit_range<&Granola::ins::sample_end>());
   std::array<double, 6> values{0., 0.1, 0., 0., 0., 1.};
+  // What execution gives the same ports, normalized as well, while it does:
+  // drawn apart from values, which stay the ones the user edits. Kept by the
+  // host.
+  std::array<std::optional<double>, 6> execution_values{};
   halp::multi_transaction transaction;
   float pos() const noexcept { return float(values[POS]); }
   float dur() const noexcept { return float(values[DUR]); }
@@ -421,6 +425,20 @@ struct WaveformItem
   {
     // The shortest grains are a line: Duration at its minimum is ~0
     return x_in_region(std::clamp(shown_pos(), 0., 1.) + std::clamp(double(dur()), 0., 1.));
+  }
+
+  //! The window as execution plays it, while execution gives Position,
+  //! Duration or the region: x0, x1
+  std::optional<std::pair<double, double>> execution_window() const
+  {
+    const auto& e = execution_values;
+    if(!e[POS] && !e[DUR] && !e[START] && !e[END])
+      return std::nullopt;
+    auto at = [&](int i) { return std::clamp(e[i].value_or(values[i]), 0., 1.); };
+    const double lo = std::min(at(START), at(END)), len = std::max(at(START), at(END)) - lo;
+    const double p = heads.scanning ? heads.scan / Granola::playheads::pos_scale : at(POS);
+    auto x = [&](double rel) { return x_of(lo + std::clamp(rel, 0., 1.) * len); };
+    return std::pair{x(p), x(std::clamp(p, 0., 1.) + at(DUR))};
   }
 
   void paint(auto ctx)
@@ -509,6 +527,23 @@ struct WaveformItem
         whisker(x0 - pj, x0 + pj, y0 + 5.);
       if(const double dj = dur_j() / 2. * region_len() * draw_w(); dj > 0.5)
         whisker(x1 - dj, x1 + dj, y1 - 5.);
+
+      // The window execution plays, outlined in the colour of runtime values
+      if(const auto ew = execution_window())
+      {
+        const auto [ex0, ex1] = *ew;
+        auto fill = ctx.to_rgba(halp::colors::runtime_value_mid);
+        fill.a = 40;
+        ctx.begin_path();
+        ctx.draw_rect(ex0, y0, ex1 - ex0, wave_h);
+        ctx.set_fill_color(fill);
+        ctx.fill();
+        ctx.begin_path();
+        ctx.draw_rect(ex0, y0 + 1., ex1 - ex0, wave_h - 2.);
+        ctx.set_stroke_color(halp::colors::runtime_value_light);
+        ctx.set_stroke_width(1.);
+        ctx.stroke();
+      }
 
       // One bar per playing grain, fading with the grain's window
       auto head = ctx.to_rgba(halp::colors::runtime_value_light);
