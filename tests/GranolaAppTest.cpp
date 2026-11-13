@@ -1008,3 +1008,49 @@ TEST_CASE("Values through the ports, as automation sends them, write nothing in 
     CHECK(m.object().inputs.sound_file.value == "b.wav");
   });
 }
+
+TEST_CASE("Output Channels 1 with a stereo sound: one channel out, at any Spread", "[app][output]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QTemporaryDir dir;
+    write_wav(dir.filePath("st.wav"), 220, 48000, 2);
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    m.set("Sound", dir.filePath("st.wav").toStdString());
+    REQUIRE(m.play_until([&] { return m.playing_grains(); }));
+
+    auto outlet_channels = [&] {
+      for(auto* o : m.comp->node->root_outputs())
+        if(auto* a = o->target<ossia::audio_port>())
+          return (int)a->channels();
+      return -1;
+    };
+    struct expect
+    {
+      int src, outs;
+      float spread;
+      int channels;
+    };
+    for(auto c : std::vector<expect>{
+            {0, 1, 0.f, 1},
+            {0, 1, 1.f, 1},
+            {0, 1, 2.f, 1},
+            {1, 1, 2.f, 1},
+            {1, 0, 0.f, 1},
+            // Output Channels 0: as many as read, but Spread needs two
+            {1, 0, 1.f, 2},
+            {0, 0, 1.f, 2},
+            {0, 2, 0.f, 2}})
+    {
+      CAPTURE(c.src, c.outs, c.spread);
+      m.set("Source Channels", c.src);
+      m.set("Output Channels", c.outs);
+      m.set("Spread", c.spread);
+      m.play(20);
+      CAPTURE((int)m.object().outputs.audio.channels);
+      CHECK(outlet_channels() == c.channels);
+    }
+  });
+}
