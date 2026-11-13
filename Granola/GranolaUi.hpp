@@ -604,15 +604,16 @@ struct WaveformItem
   enum class drag_zone
   {
     none,
-    window,     // vertical -> duration
-    start_edge, // vertical -> position deviation
-    end_edge,   // vertical -> duration deviation
+    window,     // vertical -> duration, scaled
+    start_edge, // vertical -> position deviation, scaled with the duration
+    end_edge,   // vertical -> duration deviation, scaled with the duration
     region      // a handle of the region, in the header: Sample Start or End
   };
   int m_region_edge{START};
   drag_zone m_zone{drag_zone::none};
   double m_press_x{}, m_press_y{};
   float m_pos0{}, m_dur0{}, m_pos_j0{}, m_dur_j0{};
+  static constexpr float px_per_doubling = 40.f;
   bool m_dragging{false};
 
   bool mouse_press(double x, double y)
@@ -704,23 +705,31 @@ struct WaveformItem
       set(m_region_edge, float(std::clamp((x - left_pad) / draw_w(), 0., 1.)));
       return;
     }
-    // Fractions of the region
+    // A fraction of the region
     const float dxn = float((x - m_press_x) / (draw_w() * std::max(region_len(), 1e-6)));
-    const float dyn = float((m_press_y - y) / (bottom() - top()));
+    // Up and down scale what is dragged, by two every px_per_doubling, the
+    // same at any length of the sound and of the grain
+    const float scale = std::exp2(float(m_press_y - y) / px_per_doubling);
+    // A Deviation may be 0: Deviation + Duration is what scales, so that from
+    // 0 one doubling adds a Duration, and down it comes back to 0
+    auto deviation = [&](float j0) {
+      const float d = std::max(m_dur0, 1e-8f);
+      return std::clamp((j0 + d) * scale - d, 0.f, 1.f);
+    };
     float new_pos = m_pos0 + dxn;
     switch(m_zone)
     {
       case drag_zone::window: {
-        const float new_dur = std::clamp(m_dur0 + dyn, 1e-8f, 1.f);
+        const float new_dur = std::clamp(m_dur0 * scale, 1e-8f, 1.f);
         new_pos -= (new_dur - m_dur0) / 2.f;
         set(DUR, new_dur);
         break;
       }
       case drag_zone::start_edge:
-        set(POS_J, std::clamp(m_pos_j0 + dyn, 0.f, 1.f));
+        set(POS_J, deviation(m_pos_j0));
         break;
       case drag_zone::end_edge:
-        set(DUR_J, std::clamp(m_dur_j0 + dyn, 0.f, 1.f));
+        set(DUR_J, deviation(m_dur_j0));
         break;
       default:
         break;

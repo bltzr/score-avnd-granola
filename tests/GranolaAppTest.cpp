@@ -1126,3 +1126,51 @@ TEST_CASE("Duration sent to the port while it plays: the waveform shows it apart
   });
 }
 
+TEST_CASE("A vertical drag of the window scales it, at any length of the sound", "[ui]")
+{
+  using WF = Granola::WaveformItem;
+  auto drag = [](std::array<double, 6> values, double x_of_window, double dy, int index) {
+    WF w;
+    w.set_width(600.);
+    w.waveform.ready = true;
+    w.values = values;
+    std::optional<double> got;
+    w.transaction.update = [&](int i, double v) {
+      if(i == index)
+        got = v;
+    };
+    const double x0 = w.win_x0(), x1 = w.win_x1();
+    const double x = x_of_window < 0. ? x0 : x_of_window > 1. ? x1 : x0 + x_of_window * (x1 - x0);
+    REQUIRE(w.mouse_press(x, 80.));
+    w.mouse_move(x, 80. - dy);
+    REQUIRE(got);
+    return *got;
+  };
+
+  SECTION("Duration: twice as long every 40 pixels up, half as long down")
+  {
+    for(double d : {0.2, 0.01, 0.0001})
+    {
+      CAPTURE(d);
+      const std::array<double, 6> v{0.2, d, 0., 0., 0., 1.};
+      CHECK(drag(v, 0.5, 40., WF::DUR) == Catch::Approx(2. * d));
+      CHECK(drag(v, 0.5, 80., WF::DUR) == Catch::Approx(4. * d));
+      CHECK(drag(v, 0.5, -40., WF::DUR) == Catch::Approx(d / 2.));
+    }
+    // At most the region
+    CHECK(drag({0.2, 0.6, 0., 0., 0., 1.}, 0.5, 80., WF::DUR) == Catch::Approx(1.));
+    // Centred: Position moves back by half of what Duration grew
+    CHECK(drag({0.2, 0.1, 0., 0., 0., 1.}, 0.5, 40., WF::POS) == Catch::Approx(0.15));
+  }
+  SECTION("The Deviations: Deviation and Duration together scale")
+  {
+    // From 0 up: a Duration more for 40 pixels; down to 0 again
+    const std::array<double, 6> v{0.2, 0.2, 0., 0.6, 0., 1.};
+    CHECK(drag(v, -1., 40., WF::POS_J) == Catch::Approx(0.2));
+    CHECK(drag(v, -1., -40., WF::POS_J) == Catch::Approx(0.));
+    CHECK(drag(v, 2., -40., WF::DUR_J) == Catch::Approx(0.2));
+    CHECK(drag(v, 2., 40., WF::DUR_J) == Catch::Approx(1.));
+    // A small Deviation: steps in the scale of the grain, not of the region
+    CHECK(drag({0.2, 0.1, 0.001, 0., 0., 1.}, -1., 40., WF::POS_J) == Catch::Approx(0.102));
+  }
+}
