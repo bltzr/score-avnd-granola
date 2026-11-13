@@ -614,6 +614,7 @@ struct WaveformItem
   double m_press_x{}, m_press_y{};
   float m_pos0{}, m_dur0{}, m_pos_j0{}, m_dur_j0{};
   static constexpr float px_per_doubling = 40.f;
+  static constexpr float max_doublings = 64.f;
   bool m_dragging{false};
 
   bool mouse_press(double x, double y)
@@ -708,19 +709,26 @@ struct WaveformItem
     // A fraction of the region
     const float dxn = float((x - m_press_x) / (draw_w() * std::max(region_len(), 1e-6)));
     // Up and down scale what is dragged, by two every px_per_doubling, the
-    // same at any length of the sound and of the grain
-    const float scale = std::exp2(float(m_press_y - y) / px_per_doubling);
-    // A Deviation may be 0: Deviation + Duration is what scales, so that from
-    // 0 one doubling adds a Duration, and down it comes back to 0
+    // same at any length of the sound and of the grain. Past max_doublings
+    // either way it is all of the region, or none of it.
+    const float doublings = std::clamp(
+        float(m_press_y - y) / px_per_doubling, -max_doublings, max_doublings);
+    const float scale = std::exp2(doublings);
+    // What scales is at least a pixel of the region: from a Duration of ~0 a
+    // drag still grows it, a pixel more for the first doubling
+    const float pixel = float(1. / std::max(draw_w() * region_len(), 1.));
+    const float base = std::max(m_dur0, pixel);
+    // Duration grows by what `base` grows: by its own scale when it is longer
+    // than a pixel. A Deviation may be 0: Deviation + base is what scales, so
+    // that from 0 one doubling adds a Duration, and down it comes back to 0.
     auto deviation = [&](float j0) {
-      const float d = std::max(m_dur0, 1e-8f);
-      return std::clamp((j0 + d) * scale - d, 0.f, 1.f);
+      return std::clamp(j0 * scale + base * (scale - 1.f), 0.f, 1.f);
     };
     float new_pos = m_pos0 + dxn;
     switch(m_zone)
     {
       case drag_zone::window: {
-        const float new_dur = std::clamp(m_dur0 * scale, 1e-8f, 1.f);
+        const float new_dur = std::clamp(m_dur0 + base * (scale - 1.f), 1e-8f, 1.f);
         new_pos -= (new_dur - m_dur0) / 2.f;
         set(DUR, new_dur);
         break;
