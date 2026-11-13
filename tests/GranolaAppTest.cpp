@@ -1149,7 +1149,7 @@ TEST_CASE("A vertical drag of the window scales it, at any length of the sound",
 
   SECTION("Duration: twice as long every 40 pixels up, half as long down")
   {
-    for(double d : {0.2, 0.01, 0.0001})
+    for(double d : {0.2, 0.01, 0.002})
     {
       CAPTURE(d);
       const std::array<double, 6> v{0.2, d, 0., 0., 0., 1.};
@@ -1172,5 +1172,43 @@ TEST_CASE("A vertical drag of the window scales it, at any length of the sound",
     CHECK(drag(v, 2., 40., WF::DUR_J) == Catch::Approx(1.));
     // A small Deviation: steps in the scale of the grain, not of the region
     CHECK(drag({0.2, 0.1, 0.001, 0., 0., 1.}, -1., 40., WF::POS_J) == Catch::Approx(0.102));
+  }
+  SECTION("From a Duration of ~0, a pixel of the region is what doubles")
+  {
+    // 600 pixels wide: the region is drawn on 596
+    const double pixel = 1. / 596.;
+    for(double d : {0., 1e-8, 0.0001})
+    {
+      CAPTURE(d);
+      const std::array<double, 6> v{0.2, d, 0., 0., 0., 1.};
+      CHECK(drag(v, 0.5, 40., WF::DUR) == Catch::Approx(d + pixel));
+      CHECK(drag(v, 0.5, 80., WF::DUR) == Catch::Approx(d + 3. * pixel));
+      CHECK(drag(v, 0.5, 400., WF::DUR) == Catch::Approx(1.));
+      CHECK(drag(v, 0.5, -40., WF::DUR) == Catch::Approx(1e-8).margin(1e-6));
+    }
+    // A sound half as long on screen: the pixel is twice the part of it
+    const std::array<double, 6> half{0.2, 0., 0., 0., 0., 0.5};
+    CHECK(drag(half, 0.5, 40., WF::DUR) == Catch::Approx(2. * pixel));
+  }
+  SECTION("A drag of any size gives a number")
+  {
+    for(double d : {0., 0.1})
+      for(double dy : {1e4, 1e9, -1e4, -1e9})
+      {
+        CAPTURE(d, dy);
+        const std::array<double, 6> v{0.2, d, 0., 0., 0., 1.};
+        for(int index : {WF::DUR, WF::POS})
+        {
+          const double got = drag(v, 0.5, dy, index);
+          CHECK(std::isfinite(got));
+        }
+        CHECK(drag(v, 0.5, dy, WF::DUR) == Catch::Approx(dy > 0 ? 1. : 1e-8).margin(1e-6));
+        // The ends of a window wide enough
+        if(d > 0.)
+        {
+          CHECK(std::isfinite(drag(v, -1., dy, WF::POS_J)));
+          CHECK(std::isfinite(drag(v, 2., dy, WF::DUR_J)));
+        }
+      }
   }
 }
