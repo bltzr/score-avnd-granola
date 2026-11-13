@@ -319,8 +319,10 @@ int Granola::output_channels(int sound_channels) const noexcept
   const int n = inputs.out_channels <= 0
                     ? read
                     : std::min((int)inputs.out_channels, max_outputs);
-  // Spread needs two channels, even for a mono sound
-  return inputs.spread > 0.f ? std::max(n, 2) : n;
+  // Spread needs two outputs: as many as channels read gives two for a mono
+  // read. Output Channels says how many there are; over one, Spread places
+  // every grain in it.
+  return inputs.spread > 0.f && inputs.out_channels <= 0 ? std::max(n, 2) : n;
 }
 
 void Granola::send_playheads(int frames, const GrainSource& cur)
