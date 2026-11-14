@@ -339,6 +339,7 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
   processor_to_ui msg{playheads{}};
   auto& ph = ossia::get<playheads>(msg.message);
   ph.count = 0;
+  ph.tempo = float(tempo_now);
   // Where the grains of Continuous and Trigger start: from a note's place
   // with Set position
   const bool placed = note_place(-1) >= 0.;
@@ -369,9 +370,11 @@ void Granola::send_playheads(int frames, const GrainSource& cur)
   // stands still, then jumps. Else while grains of it play, and once more
   // to clear them.
   const bool moving = ph.scanning && (inputs.playing || midi_active);
-  if(ph.count == 0 && !moving && !ui_heads_shown)
+  // And when the tempo changes, which the note values shown follow
+  if(ph.count == 0 && !moving && !ui_heads_shown && ph.tempo == ui_sent_tempo)
     return;
   ui_heads_shown = ph.count > 0 || moving;
+  ui_sent_tempo = ph.tempo;
   send_message(std::move(msg));
 }
 
@@ -1040,6 +1043,8 @@ void Granola::operator()(tick t)
   // window's math.
   sanitize_inputs();
   stop_replaced_sound();
+  if(ossia::safe_isfinite(t.tempo) && t.tempo > 0.)
+    tempo_now = t.tempo;
 
   // Density from where it was, then as its values in this tick say; the
   // control's own when none came

@@ -589,6 +589,7 @@ public:
     uint8_t count;
     bool scanning;           // whether Scan moves Position, to:
     uint16_t scan;           // where it has moved it in the region
+    float tempo;             // of the tick, for the note values the panel shows
     uint8_t amp[max_heads];  // window amplitude
     uint16_t pos[max_heads]; // position in the current sound
   };
@@ -619,6 +620,7 @@ public:
   uint64_t ui_sent_generation{};
   int ui_frame_counter{0}; // throttles the playheads
   bool ui_heads_shown{false};
+  float ui_sent_tempo{};
 
   // Where Scan has moved Position, as a part of the sound
   double scan_phase{};
@@ -696,6 +698,8 @@ public:
   // interval had: grains at the rate Density sets, not one rounded to
   // whole samples
   double trigger_counter{0};
+  // The tempo of the last tick
+  double tempo_now{120.};
   // The Density Deviation of the next grain, drawn when a grain is made
   double density_factor{1.};
   //! What Density Deviation multiplies Density by, for a normal draw \p z of
@@ -824,7 +828,8 @@ public:
   void set_voice_count(int n);
   void clear();
 
-  using tick = halp::tick;
+  // Musical: the tempo the panel shows
+  using tick = halp::tick_musical;
   void operator()(tick t);
 
 private:
