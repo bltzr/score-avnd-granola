@@ -11,6 +11,7 @@
 #include <Process/ProcessList.hpp>
 #include <Process/Dataflow/Port.hpp>
 #include <Process/Dataflow/PortItem.hpp>
+#include <Process/Preset.hpp>
 #include <Process/DocumentPlugin.hpp>
 #include <Process/Focus/FocusDispatcher.hpp>
 #include <Process/LayerPresenter.hpp>
@@ -66,7 +67,10 @@ namespace
 {
 using G = Granola::Granola;
 
-ossia::token_request make_token(int64_t& at, int rate, int buffer)
+//! A tick of \p buffer samples from \p at, the transport moving at \p tempo
+//! from \p quarters on, in 4/4
+ossia::token_request
+make_token(int64_t& at, int rate, int buffer, double tempo, double& quarters)
 {
   const int64_t per_sample = 705600000 / rate;
   ossia::token_request tk;
@@ -75,10 +79,15 @@ ossia::token_request make_token(int64_t& at, int rate, int buffer)
   tk.date = ossia::time_value{per_sample * at};
   tk.parent_duration = ossia::time_value{per_sample * 48000 * 600};
   tk.speed = 1.;
-  tk.tempo = 120.;
+  tk.tempo = tempo;
   tk.signature = ossia::time_signature{4, 4};
   tk.start_sample = 0;
   tk.length_sample = buffer;
+  tk.musical_start_position = quarters;
+  quarters += buffer * tempo / 60. / rate;
+  tk.musical_end_position = quarters;
+  tk.musical_start_last_bar = std::floor(tk.musical_start_position / 4. + 1e-9) * 4.;
+  tk.musical_end_last_bar = std::floor(tk.musical_end_position / 4. + 1e-9) * 4.;
   return tk;
 }
 
@@ -148,8 +157,12 @@ struct Mounted
   score::Document& doc;
   Execution::DocumentPlugin& plug;
   oscr::ProcessModel<G>* model{};
+  bool owns_model{true};
   std::shared_ptr<oscr::Executor<G>> comp;
   int64_t at{};
+  // The transport: its tempo, and where it is, in quarter notes
+  double tempo{120.};
+  double quarters{};
 
   Process::DataflowManager dfm;
   FocusDispatcher fd;
@@ -165,14 +178,23 @@ struct Mounted
   QTimer dismiss;
   int dismissed{};
 
-  Mounted(score::Document& d, Execution::DocumentPlugin& p)
+  //! A new Granola, or \p existing, one of the document
+  Mounted(
+      score::Document& d, Execution::DocumentPlugin& p,
+      oscr::ProcessModel<G>* existing = nullptr)
       : doc{d}
       , plug{p}
       , pctx{d.context(), dfm, fd}
   {
-    model = new oscr::ProcessModel<G>{
-        TimeVal::fromMsecs(600000), Id<Process::ProcessModel>{9301}, doc.context(),
-        &score::test::base_interval(doc)};
+    if(existing)
+    {
+      model = existing;
+      owns_model = false;
+    }
+    else
+      model = new oscr::ProcessModel<G>{
+          TimeVal::fromMsecs(600000), Id<Process::ProcessModel>{9301}, doc.context(),
+          &score::test::base_interval(doc)};
     comp = std::make_shared<oscr::Executor<G>>(*model, plug.context(), nullptr);
     REQUIRE(comp->node);
     plug.context().setup.register_node(*model, comp->node);
@@ -198,7 +220,8 @@ struct Mounted
   {
     delete_panel();
     teardown();
-    delete model;
+    if(owns_model)
+      delete model;
     spin();
     drain_gc(plug);
     scene.removeItem(&root);
@@ -245,7 +268,10 @@ struct Mounted
     ossia::set_thread_pinned(ossia::thread_type::Audio, 0);
     plug.runAllCommands();
     n.begin_execution();
-    n.run(make_token(at, 48000, buffer), ossia::exec_state_facade{plug.context().execState.get()});
+    n.run(
+        make_token(at, 48000, buffer, tempo, quarters),
+        ossia::exec_state_facade{plug.context().execState.get()});
+    log.after_tick(object(), at, buffer);
     for(auto* i : n.root_inputs())
       if(auto* v = i->target<ossia::value_port>())
         v->get_data().clear();
@@ -342,6 +368,78 @@ struct Mounted
   {
     return std::ranges::any_of(object().grains, [](auto& g) { return g.m_active; });
   }
+
+  //! The grains made, as the ticks show them: when each started, and how
+  //! long it played once it is over: more than the samples it had played by
+  //! the last tick it was seen in, at most a tick more
+  struct GrainLog
+  {
+    struct grain
+    {
+      int64_t start{};
+      int64_t played{-1}; // -1 while it plays
+      int64_t within{};   // the frames of the tick it ended in
+      //! Whether it lasted \p samples
+      bool lasted(double samples) const noexcept
+      {
+        return played >= 0 && double(played) < samples + 1.
+               && samples <= double(played + within) + 1.;
+      }
+    };
+    static constexpr int64_t unknown = -2;
+    std::vector<grain> grains;
+    std::vector<long> of_voice;   // its grain's index in grains, -1 none
+    std::vector<long> last_count; // its grain's phase counter, last tick
+    void after_tick(const G& g, int64_t now, int frames)
+    {
+      const auto n = g.grains.size();
+      of_voice.resize(n, -1);
+      last_count.resize(n, -1);
+      for(std::size_t i = 0; i < n; i++)
+      {
+        const auto& gr = g.grains[i];
+        const long c = gr.m_phase_counter;
+        // Another grain in the voice since the last tick: it started c ago
+        const bool fresh = gr.m_active && (of_voice[i] < 0 || c < last_count[i]
+                                           || grains[of_voice[i]].played != -1);
+        if(fresh)
+        {
+          // Its last one ended and another started within a tick: its
+          // length is not known
+          if(of_voice[i] >= 0 && grains[of_voice[i]].played < 0)
+            grains[of_voice[i]].played = unknown;
+          of_voice[i] = (long)grains.size();
+          grains.push_back({now - c, -1, 0});
+        }
+        else if(!gr.m_active && of_voice[i] >= 0 && grains[of_voice[i]].played < 0)
+        {
+          // Over within this tick
+          grains[of_voice[i]].played = last_count[i];
+          grains[of_voice[i]].within = frames;
+        }
+        last_count[i] = c;
+      }
+    }
+    //! The grains over, started from \p from on
+    std::vector<grain> over(int64_t from = 0) const
+    {
+      std::vector<grain> res;
+      for(auto& g : grains)
+        if(g.played >= 0 && g.start >= from)
+          res.push_back(g);
+      std::ranges::sort(res, {}, &grain::start);
+      return res;
+    }
+    std::vector<int64_t> starts(int64_t from = 0) const
+    {
+      std::vector<int64_t> res;
+      for(auto& g : grains)
+        if(g.start >= from)
+          res.push_back(g.start);
+      std::ranges::sort(res);
+      return res;
+    }
+  } log;
 };
 
 Execution::DocumentPlugin& load_execution(score::Document& doc)
@@ -1117,7 +1215,9 @@ TEST_CASE("Duration sent to the port while it plays: the waveform shows it apart
     CHECK(ew->second - ew->first == Catch::Approx(0.6 * item.draw_w()).margin(1.));
     CHECK(item.win_x1() - item.win_x0() == Catch::Approx(0.2 * item.draw_w()).margin(1.));
 
-    // Stopped: the window execution played is no longer shown
+    // Stopped: the window execution played is no longer shown. The values
+    // of the last ticks reach the panel first.
+    spin(100);
     m.model->resetExecution();
     spin(5);
     CHECK(!item.execution_values[WF::DUR]);
@@ -1211,4 +1311,251 @@ TEST_CASE("A vertical drag of the window scales it, at any length of the sound",
         }
       }
   }
+}
+
+// ---------------------------------------------------------------- Duration Mode
+
+namespace
+{
+//! The node's inlet of a control, as a cable from another process fills it
+ossia::value_port* node_port(Mounted& m, const QString& name)
+{
+  auto& inlet = m.inlet(name);
+  const auto& inl = m.model->inlets();
+  const auto idx = std::distance(inl.begin(), std::ranges::find(inl, &inlet));
+  return m.comp->node->root_inputs()[idx]->target<ossia::value_port>();
+}
+//! A sound file of \p seconds at 48 kHz, in \p dir, set as the Sound
+void use_sound(Mounted& m, QTemporaryDir& dir, double seconds)
+{
+  const auto path = dir.filePath("s.wav");
+  write_wav(path, 220, int(seconds * 48000), 1);
+  m.set("Sound", path.toStdString());
+  REQUIRE(m.play_until([&] { return m.object().inputs.sound.frames() > 0; }));
+}
+//! Each value of \p v near \p want
+void all_near(const std::vector<int64_t>& v, double want, double margin)
+{
+  REQUIRE(!v.empty());
+  for(auto x : v)
+    CHECK(double(x) == Catch::Approx(want).margin(margin));
+}
+//! Each grain of \p g lasted \p samples
+void all_lasted(const std::vector<Mounted::GrainLog::grain>& g, double samples)
+{
+  REQUIRE(!g.empty());
+  for(auto& x : g)
+  {
+    CAPTURE(x.start, x.played, x.within, samples);
+    CHECK(x.lasted(samples));
+  }
+}
+std::vector<int64_t> intervals(const std::vector<int64_t>& starts)
+{
+  std::vector<int64_t> res;
+  for(std::size_t k = 1; k < starts.size(); k++)
+    res.push_back(starts[k] - starts[k - 1]);
+  return res;
+}
+}
+
+TEST_CASE("Duration Time synced: an eighth is 0.25 s at 120 BPM and 0.5 s at 60, from the next grain on", "[app][duration-mode]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QTemporaryDir dir;
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    use_sound(m, dir, 4.);
+    m.set("Duration Mode", std::string("Time"));
+    // An eighth note, restarting at the bar lines, as the knob gives it
+    m.set("Duration Time", ossia::vec2f{1.f / 8.f, 2.f});
+    m.set("Keep time", true);
+    m.set("Density", 1.f);
+    m.play(10);
+    CHECK(m.object().inputs.dur_time.sync);
+    CHECK(m.object().inputs.dur_time.value == Catch::Approx(0.25f));
+    // Samples at the engine's rate
+    const double sr = m.object().samplerate;
+
+    // 120 BPM: grains of 0.25 s, 0.25 s apart
+    const int64_t from = m.at;
+    while(m.at < from + 48000 * 2)
+      m.tick();
+    all_lasted(m.log.over(from), 0.25 * sr);
+    all_near(intervals(m.log.starts(from)), 0.25 * sr, 1.);
+
+    // 60 BPM: the grain playing then keeps its length
+    const auto playing = m.log.starts().back();
+    const int64_t changed = m.at;
+    m.tempo = 60.;
+    while(m.at < changed + 48000 * 3)
+      m.tick();
+    CHECK(m.object().inputs.dur_time.value == Catch::Approx(0.5f));
+    bool seen = false;
+    for(auto& g : m.log.grains)
+      if(g.start == playing)
+      {
+        seen = true;
+        CHECK(g.lasted(0.25 * sr));
+      }
+    CHECK(seen);
+    // Those after: 0.5 s, and 0.5 s apart from the one playing on: the pace
+    // of the tick after the change
+    auto after = m.log.starts(changed);
+    REQUIRE(after.size() >= 3);
+    all_lasted(m.log.over(changed), 0.5 * sr);
+    after.insert(after.begin(), playing);
+    all_near(intervals(after), 0.5 * sr, 1.);
+  });
+}
+
+TEST_CASE("Duration Time free: seconds, at any tempo; a plain number sent to it is seconds", "[app][duration-mode]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QTemporaryDir dir;
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    use_sound(m, dir, 4.);
+    m.set("Duration Mode", std::string("Time"));
+    m.set("Duration Time", ossia::vec2f{0.3f, 0.f});
+    m.set("Density", 0.5f);
+    for(double tempo : {120., 60.})
+    {
+      CAPTURE(tempo);
+      m.tempo = tempo;
+      m.play(5);
+      const int64_t from = m.at;
+      while(m.at < from + 48000 * 3)
+        m.tick();
+      CHECK(!m.object().inputs.dur_time.sync);
+      all_lasted(m.log.over(from), 0.3 * m.object().samplerate);
+    }
+
+    // A number into the control, as the inspector or a preset sends it:
+    // seconds
+    m.set("Duration Time", 0.2f);
+    CHECK(m.inlet("Duration Time").value() == ossia::value{ossia::vec2f{0.2f, 0.f}});
+    // And through the node's inlet, as a cable or OSC sends it
+    auto* port = node_port(m, "Duration Time");
+    REQUIRE(port);
+    const int64_t from = m.at;
+    while(m.at < from + 48000 * 3)
+    {
+      port->write_value(0.1f, 0);
+      m.tick();
+    }
+    CHECK(!m.object().inputs.dur_time.sync);
+    CHECK(m.object().inputs.dur_time.value == Catch::Approx(0.1f));
+    all_lasted(m.log.over(from + 48000), 0.1 * m.object().samplerate);
+  });
+}
+
+TEST_CASE("A document saved before Duration had modes plays as it did", "[app][duration-mode]")
+{
+  // Saved by c3f2b2e: Duration 0.2, Duration Deviation 0, Keep time on,
+  // Density 2, an automation into Duration
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QFile file{QStringLiteral(GRANOLA_BEFORE_MODES_DOCUMENT)};
+    REQUIRE(file.open(QIODevice::ReadOnly));
+    const auto saved = file.readAll();
+    auto& delegates = ctx.interfaces<score::DocumentDelegateList>();
+    REQUIRE(!delegates.empty());
+    auto* loaded = ctx.docManager.loadDocument(
+        ctx, QStringLiteral("granola-before-modes"), saved, JSONObject::type(),
+        *delegates.begin());
+    spin();
+    REQUIRE(loaded);
+    for(int format = 0; format < 3; format++)
+    {
+      CAPTURE(format);
+      score::Document* doc = format == 0   ? loaded
+                             : format == 1 ? score::test::reload_via_json(ctx, *loaded)
+                                           : score::test::reload_via_bytes(ctx, *loaded);
+      REQUIRE(doc);
+      const auto found = processes_of(*doc, QString::fromUtf8(G::uuid()));
+      REQUIRE(found.size() == 1);
+      auto* g = dynamic_cast<oscr::ProcessModel<G>*>(found.front());
+      REQUIRE(g);
+      auto value = [&](const QString& name) {
+        auto* inlet = qobject_cast<Process::ControlInlet*>(port_named(g->inlets(), name));
+        REQUIRE(inlet);
+        return inlet->value();
+      };
+      CHECK(ossia::convert<float>(value("Duration")) == Catch::Approx(0.2f));
+      CHECK(ossia::convert<float>(value("Duration Deviation")) == 0.f);
+      CHECK(ossia::convert<bool>(value("Keep time")));
+      CHECK(ossia::convert<float>(value("Density")) == Catch::Approx(2.f));
+      // The new controls at their inits: Region, which is how it played
+      const auto mode = value("Duration Mode");
+      CHECK((mode == ossia::value{std::string("Region")} || mode == ossia::value{0}));
+      CHECK(value("Duration Time") == ossia::value{ossia::vec2f{0.1f, 0.f}});
+      // The automation's cable still goes into Duration
+      auto& cables = scenario_model(*doc).cables;
+      REQUIRE(cables.size() == 1);
+      auto& sink = cables.begin()->sink().find(doc->context());
+      CHECK(&sink == port_named(g->inlets(), "Duration"));
+
+      // Played: grains of Duration's part of the region, the automation's
+      // values as parts of it too
+      auto& plug = load_execution(*doc);
+      {
+        QTemporaryDir dir;
+        Mounted m{*doc, plug, g};
+        use_sound(m, dir, 2.);
+        m.play(20);
+        CHECK(m.object().inputs.dur_mode.value
+              == decltype(m.object().inputs.dur_mode.value)::Region);
+        int64_t from = m.at;
+        while(m.at < from + 48000 * 3)
+          m.tick();
+        // Keep time at Pitch 1: 0.2 of the sound
+        const double frames = m.object().inputs.sound.frames();
+        all_lasted(m.log.over(from), 0.2 * frames);
+        auto* port = node_port(m, "Duration");
+        REQUIRE(port);
+        from = m.at;
+        while(m.at < from + 48000 * 4)
+        {
+          port->write_value(0.35f, 0);
+          m.tick();
+        }
+        all_lasted(m.log.over(from + 48000), 0.35 * frames);
+      }
+    }
+  });
+}
+
+TEST_CASE("A preset saved before Duration had modes loads as it was saved", "[app][duration-mode]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QFile file{QStringLiteral(GRANOLA_BEFORE_MODES_PRESET)};
+    REQUIRE(file.open(QIODevice::ReadOnly));
+    Process::Preset preset;
+    preset.key.key = UuidKey<Process::ProcessModel>::fromString(QString::fromUtf8(G::uuid()));
+    preset.data = file.readAll();
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    m.set("Duration", 0.7f);
+    m.set("Keep time", false);
+    m.model->loadPreset(preset);
+    m.play(5);
+    auto& in = m.object().inputs;
+    CHECK(in.dur.value == Catch::Approx(0.2f));
+    CHECK(in.keep_time.value);
+    CHECK(in.density.value == Catch::Approx(2.f));
+    CHECK(in.dur_mode.value == decltype(in.dur_mode.value)::Region);
+    CHECK(in.dur_time.value == Catch::Approx(0.1f));
+    // An instance in Time mode stays so: a preset sets the controls it has
+    m.set("Duration Mode", std::string("Time"));
+    m.model->loadPreset(preset);
+    m.play(5);
+    CHECK(in.dur_mode.value == decltype(in.dur_mode.value)::Time);
+    CHECK(in.dur.value == Catch::Approx(0.2f));
+  });
 }

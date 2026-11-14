@@ -603,6 +603,16 @@ float Granola::deviate(float deviation) noexcept
   return deviation > 0.f ? n01(rd) * 0.25f * deviation : 0.f;
 }
 
+double Granola::grain_duration(double frames, double region_len) noexcept
+{
+  if(!timed())
+    return (inputs.dur + deviate(inputs.dur_j)) * region_len;
+  // Seconds of the sound: the same time whatever the length of the file. A
+  // Deviation relative to the grain, as Density's: never 0 or negative.
+  const double part = (double)inputs.dur_time.value * samplerate / frames;
+  return inputs.dur_j > 0.f ? part * density_factor_of(n01(rd), inputs.dur_j) : part;
+}
+
 double Granola::density_factor_of(float z, float d) noexcept
 {
   // In octaves, so that as many intervals are shorter as longer, and none is
@@ -766,6 +776,12 @@ Granola::tick_plan Granola::make_plan(const GrainSource& cur, int cur_index, boo
   const double hi
       = std::clamp(std::max(inputs.sample_start.value, inputs.sample_end.value), 0.f, 1.f);
   p.region_len = std::max(hi - p.region_lo, 2. / cur.frames);
+  // Duration Time in the region of the shown sound: where Scan turns
+  time_in_region = timed() ? std::min(
+                                 (double)inputs.dur_time.value * samplerate
+                                     / (cur.frames * p.region_len),
+                                 1.)
+                           : 0.;
 
   // Scan: Position moves by itself, through the region at Scan times the
   // sound's speed. From Position again when it stops, when it starts
@@ -797,11 +813,13 @@ Granola::tick_plan Granola::make_plan(const GrainSource& cur, int cur_index, boo
   // automated) would pack grains back-to-back up to the voice cap
   // Keep time: the length of a grain at speed 1 whatever its pitch, so that
   // grains of any pitch keep the same pace
+  // Time mode: Duration Time, the same in any file
+  const double part = timed() ? (double)inputs.dur_time.value * samplerate / frames
+                              : (double)inputs.dur * p.region_len;
   const auto interval_at = [&](double rate) {
     if(inputs.keep_time)
       rate = 1.;
-    const double dur
-        = std::max((double)inputs.dur * p.region_len, min_duration(rate, frames));
+    const double dur = std::max(part, min_duration(rate, frames));
     return frames * dur / std::abs(rate);
   };
   p.interval = interval_at(pitch_for(-1));
@@ -925,7 +943,9 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
   }
   scan_travel_at_grain = scan_travel;
   const double pos = grain_place(note, scan_at, deviate(inputs.pos_j));
-  double dur = (inputs.dur + deviate(inputs.dur_j)) * p.region_len;
+  // Time mode: Duration Time in the file this grain reads, which in a
+  // folder may be another length than the one shown
+  double dur = grain_duration(gp.source.frames, p.region_len);
   // Keep time: as much more of the sound as the grain reads faster, for it
   // to last as long
   if(inputs.keep_time && ossia::safe_isfinite(gp.rate))
@@ -1081,7 +1101,7 @@ void Granola::operator()(tick t)
       advance_timing(plan, b0 + s);
 
       const bool wanted = midi_active ? midi_pending.any() : trigger;
-      if(wanted && inputs.dur != 0. && inputs.rate != 0.)
+      if(wanted && has_duration() && inputs.rate != 0.)
         for(long k = 0; k < plan.voices; k++)
         {
           const long i = (next_voice + k) % plan.voices;

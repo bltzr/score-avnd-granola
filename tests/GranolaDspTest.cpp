@@ -615,7 +615,7 @@ TEST_CASE("The ports, by the names documents and presets find them by", "[ports]
       "Source Channels", "Channel Offset", "Max Voices", "Continuous", "Trigger",
       "MIDI In", "On MIDI", "Velocity", "Keep time", "Source", "Sounds", "Sound in folder", "Sound Order",
       "Scan in folder", "Sample Start", "Sample End", "Output Channels", "Scan Mode",
-      "Low note", "High note"};
+      "Low note", "High note", "Duration Mode", "Duration Time"};
   std::vector<std::string_view> names;
   Granola::Granola g;
   avnd::input_introspection<Granola::Granola>::for_all(

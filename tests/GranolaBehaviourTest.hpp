@@ -30,6 +30,7 @@ using source_kind = std::decay_t<decltype(G{}.inputs.source.value)>;
 using scan_mode = std::decay_t<decltype(G{}.inputs.scan_mode.value)>;
 using interp = std::decay_t<decltype(G{}.inputs.interp_type.value)>;
 using window_mode = std::decay_t<decltype(G{}.inputs.window_mode.value)>;
+using duration_mode = std::decay_t<decltype(G{}.inputs.dur_mode.value)>;
 
 inline constexpr int rate = 48000;
 // The Sound file's channels are tags 20, 21...; a folder's files 1, 2...
