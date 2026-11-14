@@ -1556,6 +1556,178 @@ TEST_CASE("Every port says what it does", "[ports]")
     CHECK(avnd::has_description<F>);
     outputs++;
   });
-  CHECK(inputs == 39);
+  CHECK(inputs == 41);
   CHECK(outputs == 2);
+}
+
+// ---------------------------------------------------------------- Duration Mode
+
+namespace
+{
+//! Grains read in Time mode for \p seconds of Duration Time
+void time_mode(Host& h, float seconds)
+{
+  h.g->inputs.dur_mode.value = duration_mode::Time;
+  h.g->inputs.dur_time.value = seconds;
+}
+}
+
+TEST_CASE("Duration Mode Time: grains last Duration Time whatever the length of the sound; Region a part of it", "[duration-mode]")
+{
+  for(double sound : {1., 10.})
+    for(bool timed : {false, true})
+    {
+      CAPTURE(sound, timed);
+      Host h{sound};
+      h.g->inputs.dur.value = 0.05f;
+      if(timed)
+        time_mode(h, 0.05f);
+      const auto segs = heard(h, 3. * sound, 0.);
+      REQUIRE(segs.size() >= 3);
+      const double want = timed ? 0.05 * rate : 0.05 * sound * rate;
+      for(auto& s : segs)
+        CHECK(s.length == Catch::Approx(want).margin(2));
+    }
+}
+
+TEST_CASE("Duration Mode Time: a grain every Duration Time at Density 1, at any pitch with Keep time", "[duration-mode][timing]")
+{
+  for(float pitch : {1.f, 2.f})
+  {
+    CAPTURE(pitch);
+    Host h{4.};
+    auto& in = h.g->inputs;
+    time_mode(h, 0.05f);
+    in.keep_time.value = true;
+    in.rate.value = pitch;
+    in.density.value = 1.f;
+    h.run(0.5);
+    REQUIRE(h.started.size() > 8);
+    for(std::size_t k = 1; k < h.started.size(); k++)
+      CHECK(h.started[k].at - h.started[k - 1].at == Catch::Approx(0.05 * rate).margin(1));
+  }
+}
+
+TEST_CASE("Duration Mode Time: a region shorter than the grain ends it there, or with Wrap at end once around; the pace stays", "[duration-mode][region]")
+{
+  for(bool wrap : {false, true})
+  {
+    CAPTURE(wrap);
+    Host h;
+    auto& in = h.g->inputs;
+    // A region of 0.1 s, the grain starting half way in it
+    in.sample_start.value = 0.2f;
+    in.sample_end.value = 0.3f;
+    in.pos.value = 0.5f;
+    in.loopmode.value = wrap;
+    time_mode(h, 0.25f);
+    in.density.value = 1.f;
+    h.forget();
+    h.run(1.6);
+    const auto runs = h.runs();
+    REQUIRE(runs.size() >= 4);
+    for(auto& r : runs)
+      CHECK(double(r.size()) == Catch::Approx(wrap ? 0.1 * rate : 0.05 * rate).margin(2));
+    REQUIRE(h.started.size() >= 5);
+    for(std::size_t k = 1; k < h.started.size(); k++)
+      CHECK(h.started[k].at - h.started[k - 1].at == Catch::Approx(0.25 * rate).margin(1));
+  }
+}
+
+TEST_CASE("Duration Mode Time: Scan Straight stops where a grain of Duration Time still fits", "[duration-mode][scan]")
+{
+  for(bool timed : {false, true})
+  {
+    CAPTURE(timed);
+    Host h;
+    auto& in = h.g->inputs;
+    in.scan.value = 1.f;
+    in.scan_mode.value = scan_mode::Straight;
+    // Duration's 0.05 would stop at 0.95, Duration Time's 0.2 s at 0.8
+    time_mode(h, 0.2f);
+    if(!timed)
+      in.dur_mode.value = duration_mode::Region;
+    in.density.value = 0.25f;
+    h.run(1.5);
+    h.forget();
+    h.run(1.);
+    const auto segs = h.segments();
+    REQUIRE(!segs.empty());
+    for(auto& s : segs)
+      CHECK(s.rel == Catch::Approx(timed ? 0.8 : 0.95).margin(0.002));
+  }
+}
+
+TEST_CASE("Duration Deviation in Time mode: lengths 2^N(0, d / 2) times Duration Time, as many shorter as longer", "[duration-mode][grain]")
+{
+  for(float dev : {0.4f, 1.f})
+  {
+    CAPTURE(dev);
+    Host h{0.5};
+    auto& in = h.g->inputs;
+    time_mode(h, 0.01f);
+    in.dur_j.value = dev;
+    // A grain every 0.2 s: the longest, 16 times Duration Time, ends before
+    // the next one
+    in.density.value = 0.05f;
+    in.loopmode.value = true;
+    in.pos.value = 0.f;
+    const auto segs = heard(h, 80., 0.);
+    REQUIRE(segs.size() > 300);
+    std::vector<double> oct;
+    for(auto& s : segs)
+      oct.push_back(std::log2(double(s.length) / (0.01 * rate)));
+    CHECK(mean(oct) == Catch::Approx(0.).margin(0.07));
+    CHECK(stddev(oct) == Catch::Approx(dev / 2.).epsilon(0.12));
+    for(double o : oct)
+      CHECK(std::abs(o) <= 4. + 1e-2);
+  }
+}
+
+TEST_CASE("Duration Mode Time with a folder: the grains of every file last the same time", "[duration-mode][folder]")
+{
+  for(bool timed : {false, true})
+  {
+    CAPTURE(timed);
+    Host h;
+    Folder f{0};
+    f.add("a.wav", 1, rate / 10, 0);
+    f.add("b.wav", 2, rate / 2, 1);
+    f.add("c.wav", 3, rate, 2);
+    h.use(f, order::Alphabetical);
+    auto& in = h.g->inputs;
+    in.dur.value = 0.05f;
+    time_mode(h, 0.02f);
+    if(!timed)
+      in.dur_mode.value = duration_mode::Region;
+    in.density.value = 0.1f;
+    const auto segs = heard(h, 3., 0.);
+    REQUIRE(segs.size() >= 9);
+    REQUIRE(file_set(segs) == std::set<int>{0, 1, 2});
+    for(auto& s : segs)
+    {
+      CAPTURE(s.tag);
+      const double frames = std::array{rate / 10, rate / 2, rate}[s.tag - 1];
+      CHECK(s.length == Catch::Approx(timed ? 0.02 * rate : 0.05 * frames).margin(2));
+    }
+  }
+}
+
+TEST_CASE("Duration Mode: switching it plays the other control, and writes neither", "[duration-mode]")
+{
+  Host h;
+  auto& in = h.g->inputs;
+  in.dur.value = 0.05f;
+  in.dur_time.value = 0.02f;
+  for(auto m : {duration_mode::Time, duration_mode::Region, duration_mode::Time})
+  {
+    CAPTURE(int(m));
+    in.dur_mode.value = m;
+    const auto segs = heard(h, 0.5, 0.1);
+    REQUIRE(segs.size() >= 2);
+    for(auto& s : segs)
+      CHECK(s.length == Catch::Approx(m == duration_mode::Time ? 0.02 * rate : 0.05 * rate).margin(2));
+    CHECK(in.dur.value == 0.05f);
+    CHECK(in.dur_time.value == 0.02f);
+  }
 }

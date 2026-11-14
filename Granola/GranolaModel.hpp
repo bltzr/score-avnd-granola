@@ -96,19 +96,25 @@ public:
           "Moves Position through the sound by itself: 1 at the sound's own speed, "
           "negative backwards, 0 to stay.")
     } scan;
+    // The length of the grains in Region mode (Duration Mode)
     struct : halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 0.1}>
     {
       halp_meta(
           description,
-          "How long each grain is, as a part of the region, from almost nothing to all "
-          "of it (1).")
+          "How long each grain is in Region mode, as a part of the region, from almost "
+          "nothing to all of it (1).")
     } dur;
+    // Region mode: N(0, d / 4) of the region, as the other Deviations. Time
+    // mode: times 2^N(0, d / 2), as Density Deviation, so that a grain of
+    // 1/16 on a long sound strays by notes rather than by minutes: at 1, 95%
+    // of the grains between half and twice Duration Time, as many shorter as
+    // longer.
     struct : halp::hslider_f32<"Duration Deviation", halp::range{0., 1., 0.}>
     {
       halp_meta(
           description,
-          "How much the length of each grain varies at random around Duration, 0 for "
-          "none.")
+          "How much the length of each grain varies at random around its Duration, 0 "
+          "for none.")
     } dur_j;
     // Each grain somewhere among the output channels (Output Channels): 0 in
     // all of them alike, 1 between two neighbouring ones (1-D VBAP), 2 in a
@@ -332,13 +338,12 @@ public:
           "How much MIDI velocity sets the level of the grains: 0 ignores it, 1 follows "
           "it fully.")
     } velocity;
-    // Duration as a time rather than a part of the sound: every grain lasts
-    // as long whatever its pitch (Pitch, its Deviation, a note, Backwards),
-    // reading as much more of the sound as it goes faster, and the grains
-    // come at a pace their pitch does not change: notes of any pitch play
-    // theirs at the same instants. A grain still reads no further than the
-    // region: past it, it ends sooner, or with Wrap at end goes around it
-    // once at most.
+    // Every grain lasts as long whatever its pitch (Pitch, its Deviation, a
+    // note, Backwards), in either Duration Mode, reading as much more of the
+    // sound as it goes faster, and the grains come at a pace their pitch does
+    // not change: notes of any pitch play theirs at the same instants. A
+    // grain still reads no further than the region: past it, it ends sooner,
+    // or with Wrap at end goes around it once at most.
     struct : halp::toggle<"Keep time">
     {
       halp_meta(
@@ -472,9 +477,9 @@ public:
         return *this;
       }
     } scan_folder;
-    // The part of the sound that plays: Position, Duration and their
-    // Deviations are fractions of it, Scan goes through it, Loop wraps in
-    // it, and no grain reads outside of it
+    // The part of the sound that plays: Position and its Deviation, and in
+    // Region mode Duration and its Deviation, are fractions of it, Scan goes
+    // through it, Loop wraps in it, and no grain reads outside of it
     struct : halp::hslider_f32<"Sample Start", halp::range{0., 1., 0.}>
     {
       halp_meta(
@@ -523,6 +528,29 @@ public:
           "The MIDI note that plays the last part of the region and picks the last file "
           "of the folder.")
     } high_note;
+    // What Duration is: Region, a part of the region (Duration); Time, a
+    // time (Duration Time). Each mode plays its own control: switching
+    // writes neither.
+    struct
+    {
+      halp_meta(
+          description,
+          "Whether grains last a part of the region (Duration) or a time, in seconds or "
+          "in notes at the tempo (Duration Time).")
+      halp__enum_combobox("Duration Mode", Region, Region, Time)
+    } dur_mode;
+    // Time mode: the length of sound a grain reads at speed 1, which is how
+    // long it lasts then, and with Keep time at any speed. Seconds, or a
+    // note value, which the host gives in seconds at the tempo of each tick:
+    // the grains made after a change of tempo follow it, the one playing
+    // keeps its length. 30 s holds four whole notes down to 32 BPM.
+    struct : halp::time_chooser<"Duration Time", halp::range{min_grain_seconds, 30., 0.1}>
+    {
+      halp_meta(
+          description,
+          "How long each grain is in Time mode: seconds, or a note value that follows "
+          "the tempo.")
+    } dur_time;
 
   } inputs;
 
@@ -600,8 +628,21 @@ public:
   //! (Wrap at end), else the last place where a whole grain fits
   double scan_last() const noexcept
   {
-    return inputs.loopmode ? 1. : std::clamp(1. - (double)inputs.dur, 1e-3, 1.);
+    return inputs.loopmode ? 1. : std::clamp(1. - grain_in_region(), 1e-3, 1.);
   }
+  //! Duration Mode is Time
+  bool timed() const noexcept
+  {
+    return inputs.dur_mode.value == decltype(inputs.dur_mode.value)::Time;
+  }
+  //! A grain at speed 1, as a part of the region: Duration, or Duration Time
+  //! in the shown sound, at most all of it
+  double grain_in_region() const noexcept
+  {
+    return timed() ? time_in_region : (double)inputs.dur;
+  }
+  // Duration Time as a part of the region of the shown sound, at most 1
+  double time_in_region{};
   const void* scan_source{};
   bool scan_was_playing{};
 
@@ -814,6 +855,12 @@ private:
 
   //! A Deviation's value for a grain: N(0, d / 4)
   float deviate(float deviation) noexcept;
+  //! The length of a grain at speed 1, with Duration Deviation, as a part of
+  //! a sound of \p frames: of the region in Region mode, Duration Time in
+  //! Time mode
+  double grain_duration(double frames, double region_len) noexcept;
+  //! Whether the grains have a length: Duration above 0, or Time mode
+  bool has_duration() const noexcept { return timed() || inputs.dur != 0.; }
   //! Whether the grains read the folder's files: Folder, with a folder set
   bool reads_folder() const noexcept;
   //! Density at sample \p s of the tick, in range

@@ -112,8 +112,13 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
 
     for(int step = 0; step < 200; step++)
     {
-      switch(rng() % 16)
+      switch(rng() % 17)
       {
+        case 16: // Duration's mode and time, anything, synced or not
+          in.dur_mode.value = decltype(in.dur_mode.value)(rng() % 3);
+          in.dur_time.value = any_value(rng) * float(1 + rng() % 100);
+          in.dur_time.sync = rng() % 2;
+          break;
         case 0: { // another sound: any length, any channels, sometimes none
           const int frames = std::array{1, 2, 3, 5, 100, 4800, 48000}[rng() % 7];
           const int count = frames > 4800 ? 1 + int(rng() % 2) : 1 + int(rng() % 12);
