@@ -41,6 +41,12 @@ struct Host
   std::vector<double*> out_ptrs;
   std::unique_ptr<Granola::Granola> g = std::make_unique<Granola::Granola>();
   int channels = 2;
+  // The transport, as a host's musical tick says it: any tempo, stopped,
+  // rewinding, jumping
+  double tempo = 120.;
+  double quarters = 0.;
+  double quarters_per_frame = 120. / 60. / 48000.;
+  int sig_num = 4, sig_denom = 4;
 
   Host()
   {
@@ -55,7 +61,14 @@ struct Host
 
   void tick(int frames)
   {
-    (*g)({.frames = frames});
+    halp::tick_musical t{.frames = frames};
+    t.tempo = tempo;
+    t.signature = {sig_num, sig_denom};
+    t.start_position_in_quarters = quarters;
+    quarters += quarters_per_frame * frames;
+    t.end_position_in_quarters = quarters;
+    t.bar_at_start = t.bar_at_end = std::floor(t.start_position_in_quarters / 4.) * 4.;
+    (*g)(t);
     bool finite = true;
     for(int c = 0; c < (int)g->outputs.audio.channels; c++)
       for(int s = 0; s < frames; s++)
@@ -112,8 +125,31 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
 
     for(int step = 0; step < 200; step++)
     {
-      switch(rng() % 16)
+      switch(rng() % 19)
       {
+        case 16: // Duration's mode and time, anything, synced or not
+          in.dur_mode.value = decltype(in.dur_mode.value)(rng() % 3);
+          in.dur_time.value = any_value(rng) * float(1 + rng() % 100);
+          in.dur_time.sync = rng() % 2;
+          break;
+        case 17: { // Quantize: any unit, past the ones it offers too, any value
+          in.quantize.value.unit = halp::grid_unit(int(rng() % 6) - 1);
+          in.quantize.value.value = any_value(rng) * float(1 + rng() % 40);
+          in.quantize.value.offset = any_value(rng);
+          break;
+        }
+        case 18: { // the transport
+          h.tempo = std::array{120., 60., 1., 999., 0., -10., 1e9}[rng() % 7];
+          if(rng() % 8 == 0)
+            h.tempo = std::numeric_limits<double>::quiet_NaN();
+          h.quarters_per_frame
+              = std::array{2. / 48000., 0., -1. / 48000., 1e-9, 50. / 48000.}[rng() % 5];
+          if(rng() % 4 == 0)
+            h.quarters = any_value(rng) * 1e4;
+          h.sig_num = int(rng() % 9) - 1;
+          h.sig_denom = std::array{4, 8, 0, 2}[rng() % 4];
+          break;
+        }
         case 0: { // another sound: any length, any channels, sometimes none
           const int frames = std::array{1, 2, 3, 5, 100, 4800, 48000}[rng() % 7];
           const int count = frames > 4800 ? 1 + int(rng() % 2) : 1 + int(rng() % 12);

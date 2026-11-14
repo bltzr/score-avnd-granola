@@ -94,7 +94,12 @@ if(SCORE_TESTING AND TARGET Catch2::Catch2WithMain AND NOT SCORE_FAST_DEV_BUILD)
     target_link_libraries(score_addon_granola_app_test PRIVATE score_test_fixtures)
     # A document saved by the Granola released first (origin/main at a45445a)
     target_compile_definitions(score_addon_granola_app_test PRIVATE
-      GRANOLA_V1_DOCUMENT="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/granola-v1-origin-main.score")
+      GRANOLA_V1_DOCUMENT="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/granola-v1-origin-main.score"
+      # A document and a preset saved before Duration had modes (c3f2b2e): a
+      # Granola with Duration 0.2, Keep time on, Density 2, an automation
+      # into Duration
+      GRANOLA_BEFORE_MODES_DOCUMENT="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/granola-before-duration-modes.score"
+      GRANOLA_BEFORE_MODES_PRESET="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/granola-before-duration-modes.preset.json")
     set_tests_properties(score_addon_granola_app_test PROPERTIES
       TIMEOUT 600 LABELS "integration;granola")
   endif()

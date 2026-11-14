@@ -24,6 +24,8 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <string>
+#include <tuple>
 
 namespace Granola
 {
@@ -205,13 +207,43 @@ struct FolderFiles
   }
 };
 
-//! Whether a control's range is [0, 1], or nearly: the waveform takes the
-//! normalized values the host gives it as the values themselves
-template <auto F>
-consteval bool unit_range()
+//! A time chooser's value as score keeps it: seconds (mode 0), or a
+//! fraction of a whole note (mode 1 to 3, synced to the tempo)
+struct time_value
 {
-  constexpr auto r = avnd::get_range<std::decay_t<decltype(Granola::ins{}.*F)>>();
-  return r.min >= 0. && r.min < 1e-6 && r.max == 1.;
+  float x{0.1f};
+  float mode{};
+  bool synced() const noexcept { return mode != 0.f; }
+  //! Its length at \p tempo
+  double seconds(double tempo) const noexcept
+  {
+    return synced() ? 4. * x * 60. / tempo : x;
+  }
+  bool operator==(const time_value&) const noexcept = default;
+};
+
+//! Note values as score's time chooser names them: 1/8, 1/8. (dotted),
+//! 1/8T (triplet), 2/1; else the fraction of a whole note
+inline void note_name(char* out, std::size_t size, double x)
+{
+  const auto name = [&](double straight, const char* suffix) {
+    if(straight >= 1.)
+      std::snprintf(out, size, "%d/1%s", int(std::lround(straight)), suffix);
+    else
+      std::snprintf(out, size, "1/%d%s", int(std::lround(1. / straight)), suffix);
+  };
+  const auto power_of_two = [](double v) {
+    const double e = std::log2(v);
+    return v > 0. && std::abs(e - std::round(e)) < 1e-4;
+  };
+  if(power_of_two(x))
+    name(x, "");
+  else if(power_of_two(x / 1.5))
+    name(x / 1.5, ".");
+  else if(power_of_two(x * 1.5))
+    name(x * 1.5, "T");
+  else
+    std::snprintf(out, size, "%.3g of a whole note", x);
 }
 
 // Where the sound comes from, as a dropdown of score draws it, with its +/-
@@ -334,27 +366,86 @@ struct WaveformItem
   halp::sound_status status{halp::sound_status::ready};
 
   // The ports the waveform shows and edits, in the order of ui's
-  // custom_multi_control, normalized: their ranges are [0, 1]. Kept up to date
-  // by the host; a drag edits them through the transaction, as one undo step.
-  enum : int { POS, DUR, POS_J, DUR_J, START, END };
-  static_assert(
-      unit_range<&Granola::ins::pos>() && unit_range<&Granola::ins::dur>()
-      && unit_range<&Granola::ins::pos_j>() && unit_range<&Granola::ins::dur_j>()
-      && unit_range<&Granola::ins::sample_start>() && unit_range<&Granola::ins::sample_end>());
-  std::array<double, 6> values{0., 0.1, 0., 0., 0., 1.};
-  halp::multi_transaction transaction;
-  float pos() const noexcept { return float(values[POS]); }
-  float dur() const noexcept { return float(values[DUR]); }
-  float pos_j() const noexcept { return float(values[POS_J]); }
-  float dur_j() const noexcept { return float(values[DUR_J]); }
+  // custom_multi_control, as their own values: Duration Time a time
+  // chooser's {x, mode}, Duration Mode an entry's name (or its index). Kept
+  // up to date by the host; a drag edits them through the transactions, as
+  // one undo step. Duration Mode is only shown.
+  enum : int { POS, DUR, POS_J, DUR_J, START, END, DUR_TIME, DUR_MODE };
+  using values_type
+      = std::tuple<float, float, float, float, float, float, time_value, std::string>;
+  values_type values{0.f, 0.1f, 0.f, 0.f, 0.f, 1.f, time_value{}, std::string{"Region"}};
+  // What execution gives the same ports, while it does: drawn apart from
+  // values, which stay the ones the user edits. Kept by the host. Duration
+  // Time's is in seconds, at the tempo, in x; its mode means nothing.
+  std::tuple<
+      std::optional<float>, std::optional<float>, std::optional<float>,
+      std::optional<float>, std::optional<float>, std::optional<float>,
+      std::optional<time_value>, std::optional<std::string>>
+      execution_values{};
+  std::tuple<
+      halp::transaction<float>, halp::transaction<float>, halp::transaction<float>,
+      halp::transaction<float>, halp::transaction<float>, halp::transaction<float>,
+      halp::transaction<time_value>>
+      transactions;
+
+  //! The value of one of the six controls of the region, POS to END
+  double value(int i) const noexcept
+  {
+    switch(i)
+    {
+      case POS: return std::get<POS>(values);
+      case DUR: return std::get<DUR>(values);
+      case POS_J: return std::get<POS_J>(values);
+      case DUR_J: return std::get<DUR_J>(values);
+      case START: return std::get<START>(values);
+      default: return std::get<END>(values);
+    }
+  }
+  //! What execution gives one of them, if it does
+  std::optional<double> execution(int i) const noexcept
+  {
+    const auto& e = execution_values;
+    switch(i)
+    {
+      case POS: return std::get<POS>(e);
+      case DUR: return std::get<DUR>(e);
+      case POS_J: return std::get<POS_J>(e);
+      case DUR_J: return std::get<DUR_J>(e);
+      case START: return std::get<START>(e);
+      default: return std::get<END>(e);
+    }
+  }
+  static bool time_mode(const std::string& m) noexcept { return m == "Time" || m == "1"; }
+
+  float pos() const noexcept { return std::get<POS>(values); }
+  float dur() const noexcept { return std::get<DUR>(values); }
+  float pos_j() const noexcept { return std::get<POS_J>(values); }
+  float dur_j() const noexcept { return std::get<DUR_J>(values); }
+  const time_value& dur_time() const noexcept { return std::get<DUR_TIME>(values); }
+  bool timed() const noexcept { return time_mode(std::get<DUR_MODE>(values)); }
   // The region the others are fractions of, as the processor reads it
   double region_lo() const noexcept
   {
-    return std::clamp(std::min(values[START], values[END]), 0., 1.);
+    return std::clamp(std::min(value(START), value(END)), 0., 1.);
   }
   double region_len() const noexcept
   {
-    return std::clamp(std::max(values[START], values[END]), 0., 1.) - region_lo();
+    return std::clamp(std::max(value(START), value(END)), 0., 1.) - region_lo();
+  }
+  //! The tempo the processor plays at, or score's own until it says
+  double tempo() const noexcept { return heads.tempo > 0.f ? heads.tempo : 120.; }
+  //! \p seconds of the sound as a part of a region of \p len
+  double seconds_in_region(double seconds, double len) const noexcept
+  {
+    if(!(waveform.duration > 0.) || !(len > 0.))
+      return 0.;
+    return seconds / (waveform.duration * len);
+  }
+  //! The grain at speed 1 as a part of the region: Duration, or Duration
+  //! Time in the sound shown
+  double grain_part() const noexcept
+  {
+    return timed() ? seconds_in_region(dur_time().seconds(tempo()), region_len()) : dur();
   }
   //! x of a fraction of the sound
   double x_of(double abs) const noexcept { return left_pad + abs * draw_w(); }
@@ -419,8 +510,37 @@ struct WaveformItem
   double win_x0() const { return x_in_region(shown_pos()); }
   double win_x1() const
   {
-    // The shortest grains are a line: Duration at its minimum is ~0
-    return x_in_region(std::clamp(shown_pos(), 0., 1.) + std::clamp(double(dur()), 0., 1.));
+    // The shortest grains are a line: Duration at its minimum is ~0. A
+    // grain longer than what is left of the region ends at its end, as the
+    // processor's do.
+    return x_in_region(std::clamp(shown_pos(), 0., 1.) + std::clamp(grain_part(), 0., 1.));
+  }
+
+  //! The window as execution plays it, while execution gives Position, the
+  //! grain's length or mode, or the region, and it is not the one set: x0, x1
+  std::optional<std::pair<double, double>> execution_window() const
+  {
+    const auto& e = execution_values;
+    const auto& e_time = std::get<DUR_TIME>(e);
+    const auto& e_mode = std::get<DUR_MODE>(e);
+    if(!execution(POS) && !execution(DUR) && !execution(START) && !execution(END) && !e_time
+       && !e_mode)
+      return std::nullopt;
+    auto at = [&](int i) { return std::clamp(execution(i).value_or(value(i)), 0., 1.); };
+    const double lo = std::min(at(START), at(END)), len = std::max(at(START), at(END)) - lo;
+    const double p = heads.scanning ? heads.scan / Granola::playheads::pos_scale : at(POS);
+    const bool timed = time_mode(e_mode.value_or(std::get<DUR_MODE>(values)));
+    const double part
+        = !timed ? at(DUR)
+                 : seconds_in_region(
+                       e_time ? e_time->x : dur_time().seconds(tempo()), len);
+    auto x = [&](double rel) { return x_of(lo + std::clamp(rel, 0., 1.) * len); };
+    const std::pair w{x(p), x(std::clamp(p, 0., 1.) + std::clamp(part, 0., 1.))};
+    // The same window as the one set, e.g. Duration Time's seconds for its
+    // note value at this tempo: nothing apart to show
+    if(std::abs(w.first - win_x0()) < 0.5 && std::abs(w.second - win_x1()) < 0.5)
+      return std::nullopt;
+    return w;
   }
 
   void paint(auto ctx)
@@ -504,11 +624,35 @@ struct WaveformItem
         ctx.set_stroke_width(1.);
         ctx.stroke();
       };
-      // Fractions of the region
+      // Fractions of the region; in Time mode, Duration Deviation as a
+      // factor of the grain, 2^(d / 2) either way (two of its deviations)
       if(const double pj = pos_j() / 2. * region_len() * draw_w(); pj > 0.5)
         whisker(x0 - pj, x0 + pj, y0 + 5.);
-      if(const double dj = dur_j() / 2. * region_len() * draw_w(); dj > 0.5)
+      if(timed())
+      {
+        const double f = std::exp2(dur_j() / 2.);
+        if(dur_j() > 0.f && (x1 - x0) * (f - 1. / f) > 1.)
+          whisker(x0 + (x1 - x0) / f, x0 + (x1 - x0) * f, y1 - 5.);
+      }
+      else if(const double dj = dur_j() / 2. * region_len() * draw_w(); dj > 0.5)
         whisker(x1 - dj, x1 + dj, y1 - 5.);
+
+      // The window execution plays, outlined in the colour of runtime values
+      if(const auto ew = execution_window())
+      {
+        const auto [ex0, ex1] = *ew;
+        auto fill = ctx.to_rgba(halp::colors::runtime_value_mid);
+        fill.a = 40;
+        ctx.begin_path();
+        ctx.draw_rect(ex0, y0, ex1 - ex0, wave_h);
+        ctx.set_fill_color(fill);
+        ctx.fill();
+        ctx.begin_path();
+        ctx.draw_rect(ex0, y0 + 1., ex1 - ex0, wave_h - 2.);
+        ctx.set_stroke_color(halp::colors::runtime_value_light);
+        ctx.set_stroke_width(1.);
+        ctx.stroke();
+      }
 
       // One bar per playing grain, fading with the grain's window
       auto head = ctx.to_rgba(halp::colors::runtime_value_light);
@@ -536,8 +680,9 @@ struct WaveformItem
       ctx.fill();
     }
 
-    // Header: name, length, channels; or why there is no waveform
-    char label[300];
+    // Header: name, length, channels, in Time mode the grain's; or why
+    // there is no waveform
+    char label[340];
     if(name.empty())
       label[0] = 0;
     else if(status == halp::sound_status::failed)
@@ -545,9 +690,18 @@ struct WaveformItem
     else if(status != halp::sound_status::ready)
       std::snprintf(label, sizeof(label), "%s, loading", name.c_str());
     else if(waveform.duration > 0. && waveform.channels > 0)
+    {
+      char grain[40] = "";
+      if(timed())
+      {
+        char length[32];
+        grain_length_name(length, sizeof(length));
+        std::snprintf(grain, sizeof(grain), ", grain %s", length);
+      }
       std::snprintf(
-          label, sizeof(label), "%s, %.2f s, %d ch", name.c_str(), waveform.duration,
-          waveform.channels);
+          label, sizeof(label), "%s, %.2f s, %d ch%s", name.c_str(), waveform.duration,
+          waveform.channels, grain);
+    }
     else
       std::snprintf(label, sizeof(label), "%s", name.c_str());
     ctx.begin_path();
@@ -566,19 +720,68 @@ struct WaveformItem
     }
   }
 
+  //! Duration Time as the header names it: its note value, or its time
+  void grain_length_name(char* out, std::size_t size) const
+  {
+    const auto& t = dur_time();
+    if(t.synced())
+      note_name(out, size, t.x);
+    else if(t.x >= 1.f)
+      std::snprintf(out, size, "%.2f s", t.x);
+    else if(t.x >= 0.01f)
+      std::snprintf(out, size, "%.0f ms", t.x * 1000.);
+    else
+      std::snprintf(out, size, "%.1f ms", t.x * 1000.);
+  }
+
   enum class drag_zone
   {
     none,
-    window,     // vertical -> duration
-    start_edge, // vertical -> position deviation
-    end_edge,   // vertical -> duration deviation
+    window,     // vertical -> duration, scaled
+    start_edge, // vertical -> position deviation, scaled with the duration
+    end_edge,   // vertical -> duration deviation, scaled with the duration
     region      // a handle of the region, in the header: Sample Start or End
   };
   int m_region_edge{START};
   drag_zone m_zone{drag_zone::none};
   double m_press_x{}, m_press_y{};
   float m_pos0{}, m_dur0{}, m_pos_j0{}, m_dur_j0{};
+  time_value m_time0{};
+  bool m_timed{};
+  static constexpr float px_per_doubling = 40.f;
+  static constexpr float max_doublings = 64.f;
   bool m_dragging{false};
+
+  //! The note value \p x moved by \p steps doublings, within the values of
+  //! its feel score's time chooser offers: each feel is a series of
+  //! doublings, straight 1/64 to 4/1, dotted 1/32. to 2/1., triplet 1/32T
+  //! to 1/1T
+  static double step_note(double x, int steps) noexcept
+  {
+    const auto feel_of = [](double v) {
+      const double e = std::log2(v);
+      if(std::abs(e - std::round(e)) < 1e-4)
+        return 0; // straight
+      const double d = std::log2(v / 1.5);
+      return std::abs(d - std::round(d)) < 1e-4 ? 1 : 2; // dotted, else triplet
+    };
+    static constexpr double lo[]{1. / 64., 3. / 64., 1. / 48.};
+    static constexpr double hi[]{4., 3., 2. / 3.};
+    const int f = x > 0. ? feel_of(x) : 0;
+    if(!(x > 0.))
+      x = 1. / 8.;
+    return std::clamp(x * std::exp2(steps), lo[f], hi[f]);
+  }
+  void start_gesture()
+  {
+    if(auto& s = std::get<POS>(transactions).start)
+      s();
+  }
+  void commit_gesture()
+  {
+    if(auto& c = std::get<POS>(transactions).commit)
+      c();
+  }
 
   bool mouse_press(double x, double y)
   {
@@ -594,12 +797,11 @@ struct WaveformItem
         const bool lo = std::abs(x - rx0) < std::abs(x - rx1)
                         || (rx0 == rx1 && rx0 > left_pad + draw_w() / 2.);
         // Which port is the low one: Start and End may be the other way
-        const bool start_is_lo = values[START] <= values[END];
+        const bool start_is_lo = value(START) <= value(END);
         m_region_edge = (lo == start_is_lo) ? START : END;
         m_zone = drag_zone::region;
         m_dragging = true;
-        if(transaction.start)
-          transaction.start();
+        start_gesture();
         return true;
       }
     }
@@ -635,7 +837,10 @@ struct WaveformItem
     m_press_x = x;
     m_press_y = y;
     m_pos0 = pos();
-    m_dur0 = dur();
+    // The window's width, as a part of the region, in either mode
+    m_timed = timed();
+    m_dur0 = float(std::clamp(grain_part(), 0., 1.));
+    m_time0 = dur_time();
     m_pos_j0 = pos_j();
     m_dur_j0 = dur_j();
 
@@ -655,8 +860,7 @@ struct WaveformItem
     else
       m_zone = drag_zone::none;
     m_dragging = true;
-    if(transaction.start)
-      transaction.start();
+    start_gesture();
     return true;
   }
 
@@ -669,23 +873,61 @@ struct WaveformItem
       set(m_region_edge, float(std::clamp((x - left_pad) / draw_w(), 0., 1.)));
       return;
     }
-    // Fractions of the region
+    // A fraction of the region
     const float dxn = float((x - m_press_x) / (draw_w() * std::max(region_len(), 1e-6)));
-    const float dyn = float((m_press_y - y) / (bottom() - top()));
+    // Up and down scale what is dragged, by two every px_per_doubling, the
+    // same at any length of the sound and of the grain. Past max_doublings
+    // either way it is all of the region, or none of it.
+    const float doublings = std::clamp(
+        float(m_press_y - y) / px_per_doubling, -max_doublings, max_doublings);
+    const float scale = std::exp2(doublings);
+    // What scales is at least a pixel of the region: from a Duration of ~0 a
+    // drag still grows it, a pixel more for the first doubling
+    const float pixel = float(1. / std::max(draw_w() * region_len(), 1.));
+    const float base = std::max(m_dur0, pixel);
+    // Duration grows by what `base` grows: by its own scale when it is longer
+    // than a pixel. A Deviation may be 0: Deviation + base is what scales, so
+    // that from 0 one doubling adds a Duration, and down it comes back to 0.
+    auto deviation = [&](float j0) {
+      return std::clamp(j0 * scale + base * (scale - 1.f), 0.f, 1.f);
+    };
     float new_pos = m_pos0 + dxn;
     switch(m_zone)
     {
-      case drag_zone::window: {
-        const float new_dur = std::clamp(m_dur0 + dyn, 1e-8f, 1.f);
-        new_pos -= (new_dur - m_dur0) / 2.f;
-        set(DUR, new_dur);
+      case drag_zone::window:
+        if(m_timed)
+        {
+          // Seconds scale as Duration does; a note value steps to the next
+          // one of its feel every px_per_doubling, and stays a note value
+          time_value t = m_time0;
+          if(t.synced())
+            t.x = float(step_note(t.x, int(std::lround(doublings))));
+          else
+            t.x = std::clamp(
+                float(t.x * scale), float(Granola::min_grain_seconds), float(max_time));
+          const double was = m_dur0;
+          const double now
+              = std::clamp(seconds_in_region(t.seconds(tempo()), region_len()), 0., 1.);
+          new_pos -= float(now - was) / 2.f;
+          set_time(t);
+        }
+        else
+        {
+          const float new_dur = std::clamp(m_dur0 + base * (scale - 1.f), 1e-8f, 1.f);
+          new_pos -= (new_dur - m_dur0) / 2.f;
+          set(DUR, new_dur);
+        }
         break;
-      }
       case drag_zone::start_edge:
-        set(POS_J, std::clamp(m_pos_j0 + dyn, 0.f, 1.f));
+        set(POS_J, deviation(m_pos_j0));
         break;
       case drag_zone::end_edge:
-        set(DUR_J, std::clamp(m_dur_j0 + dyn, 0.f, 1.f));
+        // Time mode: a factor of the grain, as the processor reads it: 1 +
+        // Deviation scales
+        if(m_timed)
+          set(DUR_J, std::clamp((m_dur_j0 + 1.f) * scale - 1.f, 0.f, 1.f));
+        else
+          set(DUR_J, deviation(m_dur_j0));
         break;
       default:
         break;
@@ -693,10 +935,33 @@ struct WaveformItem
     set(POS, std::clamp(new_pos, 1e-8f, 1.f));
   }
 
+  // Duration Time's range
+  static constexpr double max_time
+      = avnd::get_range<std::decay_t<decltype(Granola::ins{}.dur_time)>>().max;
+
+  //! One of the six controls of the region, POS to END
   void set(int index, float v)
   {
-    if(transaction.update)
-      transaction.update(index, v);
+    const auto go = [v](auto& tr) {
+      if(tr.update)
+        tr.update(v);
+    };
+    auto& t = transactions;
+    switch(index)
+    {
+      case POS: go(std::get<POS>(t)); break;
+      case DUR: go(std::get<DUR>(t)); break;
+      case POS_J: go(std::get<POS_J>(t)); break;
+      case DUR_J: go(std::get<DUR_J>(t)); break;
+      case START: go(std::get<START>(t)); break;
+      case END: go(std::get<END>(t)); break;
+      default: break;
+    }
+  }
+  void set_time(const time_value& v)
+  {
+    if(auto& u = std::get<DUR_TIME>(transactions).update)
+      u(v);
   }
 
   void mouse_release(double x, double y)
@@ -706,8 +971,7 @@ struct WaveformItem
     mouse_move(x, y);
     m_dragging = false;
     m_zone = drag_zone::none;
-    if(transaction.commit)
-      transaction.commit();
+    commit_gesture();
   }
 };
 
@@ -802,13 +1066,14 @@ struct Granola::ui
 
     halp::custom_multi_control<
         WaveformItem, &ins::pos, &ins::dur, &ins::pos_j, &ins::dur_j,
-        &ins::sample_start, &ins::sample_end>
+        &ins::sample_start, &ins::sample_end, &ins::dur_time, &ins::dur_mode>
         waveform;
   } sound;
 
   // What plays the grains, then in signal order: where and how long grains
-  // are and how many, their pitch, their level, their shape
-  struct
+  // are and how many, their pitch, their level, their shape. Named structs
+  // down to Duration's pages, as for the source's
+  struct params_t
   {
     halp_meta(layout, hbox)
 
@@ -833,6 +1098,8 @@ struct Granola::ui
         // The keys of On MIDI's slices and of By MIDI note's files, over it
         halp::item<&ins::low_note, halp::label_as("Low note")> low_note;
         halp::item<&ins::high_note, halp::label_as("High note")> high_note;
+        // The grid grains start on
+        halp::item<&ins::quantize, halp::label_as("Quantize")> quantize;
       } controls;
       // What MIDI notes do, the files they pick being Order's: under the
       // others, as wide as its longest entry
@@ -845,14 +1112,14 @@ struct Granola::ui
       } midi;
     } play;
 
-    struct
+    struct grain_t
     {
       halp_meta(name, "Grain")
       halp_meta(layout, section)
       halp_meta(background, background_mid)
       // Where in the sound grains read, how long, and how: Position and
       // Duration, the region, then Scan, which moves Position, in a column
-      struct
+      struct knobs_t
       {
         halp_meta(layout, grid)
         halp_meta(columns, 3)
@@ -862,7 +1129,30 @@ struct Granola::ui
         halp::item<&ins::pos_j, small_slider_as("Deviation")> pos_jitter;
         // Position moving by itself
         halp::item<&ins::scan, small_knob_as("Scan")> scan;
-        halp::item<&ins::dur, small_knob_as("Duration")> duration;
+        // Duration Mode's control: the part of the region, or the time
+        struct duration_t
+        {
+          halp_meta(layout, tabs)
+          halp_flag(hide_tabs);
+          halp_meta(padding, 0)
+          static constexpr auto model = &ins::dur_mode;
+          struct
+          {
+            halp_meta(name, "Region")
+            halp_meta(layout, hbox)
+            halp_meta(padding, 0)
+            halp::item<&ins::dur, small_knob_as("Duration")> duration;
+          } region;
+          struct
+          {
+            halp_meta(name, "Time")
+            halp_meta(layout, hbox)
+            halp_meta(padding, 0)
+            // score's time chooser: its knob and its readout of seconds or
+            // a note value
+            halp::item<&ins::dur_time, small_slider_as("Duration")> duration;
+          } time;
+        } duration;
         halp::item<&ins::dur_j, small_slider_as("Deviation")> dur_jitter;
         halp::item<&ins::scan_mode, dropdown_as("Scan mode")> scan_mode;
         // The part of the sound grains read; also by the handles over the
@@ -884,8 +1174,9 @@ struct Granola::ui
         } scan_folder;
         // Grains reaching the end of the region go on from its start
         halp::item<&ins::loopmode, halp::label_as("Wrap at end")> wrap;
-        halp::spacing none{.width = 0, .height = 0};
-        // Duration as a time, at any pitch
+        // Whether Duration is a part of the region or a time
+        halp::item<&ins::dur_mode, dropdown_as("Duration mode")> dur_mode;
+        // The same length and pace at any pitch
         halp::item<&ins::keep_time> keep_time;
       } knobs;
     } grain;

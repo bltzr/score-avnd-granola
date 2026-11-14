@@ -30,6 +30,7 @@ using source_kind = std::decay_t<decltype(G{}.inputs.source.value)>;
 using scan_mode = std::decay_t<decltype(G{}.inputs.scan_mode.value)>;
 using interp = std::decay_t<decltype(G{}.inputs.interp_type.value)>;
 using window_mode = std::decay_t<decltype(G{}.inputs.window_mode.value)>;
+using duration_mode = std::decay_t<decltype(G{}.inputs.dur_mode.value)>;
 
 inline constexpr int rate = 48000;
 // The Sound file's channels are tags 20, 21...; a folder's files 1, 2...
@@ -134,6 +135,11 @@ struct Host
   int most_active{};
   std::vector<long> last_counter;
   std::vector<long> started_of; // the Started of the grain of each voice
+  // The transport, as score's musical ticks give it: none while tempo is 0;
+  // else the quarter notes since the start, running at tempo
+  double tempo{0.};
+  double quarters{};
+  int sig_num{4}, sig_denom{4};
 
   //! A Sound file of \p seconds and \p channels, coded or of \p dc; Gain 1, a
   //! flat window, Linear interpolation, no Spread: the output is the samples
@@ -255,7 +261,20 @@ struct Host
       std::fill_n(c.begin(), n, 0.);
     g->inputs.midi.midi_messages.assign(midi_next.begin(), midi_next.end());
     midi_next.clear();
-    (*g)({.frames = n});
+    halp::tick_musical t{.frames = n};
+    if(tempo > 0.)
+    {
+      t.tempo = tempo;
+      t.signature = {sig_num, sig_denom};
+      t.position_in_frames = now;
+      t.start_position_in_quarters = quarters;
+      quarters += n * tempo / 60. / rate;
+      t.end_position_in_quarters = quarters;
+      const double bar = 4. * sig_num / sig_denom;
+      t.bar_at_start = std::floor(t.start_position_in_quarters / bar + 1e-9) * bar;
+      t.bar_at_end = std::floor(t.end_position_in_quarters / bar + 1e-9) * bar;
+    }
+    (*g)(t);
     g->inputs.trig.value.reset();
     g->inputs.midi.midi_messages.clear();
     g->inputs.density.values.clear();

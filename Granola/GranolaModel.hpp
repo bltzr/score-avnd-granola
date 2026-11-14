@@ -6,6 +6,7 @@
 #include <halp/audio.hpp>
 #include <halp/controls.hpp>
 #include <halp/folder_combobox.hpp>
+#include <halp/grid.hpp>
 #include <halp/mappers.hpp>
 #include <halp/meta.hpp>
 #include <halp/midi.hpp>
@@ -20,6 +21,8 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
+#include <optional>
 #include <random>
 #include <vector>
 
@@ -59,6 +62,10 @@ public:
   static constexpr double max_density_octaves = 4.;
   static constexpr double max_density_factor = 16.; // 2^max_density_octaves
 
+  // Quantize: no grid at first, else the grids of score's grid chooser
+  static constexpr halp::grid_setup quantize_setup{
+      .units = halp::grid_units::musical, .init = {}, .max_bars = 16, .max_seconds = 8.};
+
   struct ins
   {
     struct : halp::soundfile_port<"Sound">
@@ -96,19 +103,25 @@ public:
           "Moves Position through the sound by itself: 1 at the sound's own speed, "
           "negative backwards, 0 to stay.")
     } scan;
+    // The length of the grains in Region mode (Duration Mode)
     struct : halp::hslider_f32<"Duration", halp::range{0.00000001, 1., 0.1}>
     {
       halp_meta(
           description,
-          "How long each grain is, as a part of the region, from almost nothing to all "
-          "of it (1).")
+          "How long each grain is in Region mode, as a part of the region, from almost "
+          "nothing to all of it (1).")
     } dur;
+    // Region mode: N(0, d / 4) of the region, as the other Deviations. Time
+    // mode: times 2^N(0, d / 2), as Density Deviation, so that a grain of
+    // 1/16 on a long sound strays by notes rather than by minutes: at 1, 95%
+    // of the grains between half and twice Duration Time, as many shorter as
+    // longer.
     struct : halp::hslider_f32<"Duration Deviation", halp::range{0., 1., 0.}>
     {
       halp_meta(
           description,
-          "How much the length of each grain varies at random around Duration, 0 for "
-          "none.")
+          "How much the length of each grain varies at random around its Duration, 0 "
+          "for none.")
     } dur_j;
     // Each grain somewhere among the output channels (Output Channels): 0 in
     // all of them alike, 1 between two neighbouring ones (1-D VBAP), 2 in a
@@ -332,13 +345,12 @@ public:
           "How much MIDI velocity sets the level of the grains: 0 ignores it, 1 follows "
           "it fully.")
     } velocity;
-    // Duration as a time rather than a part of the sound: every grain lasts
-    // as long whatever its pitch (Pitch, its Deviation, a note, Backwards),
-    // reading as much more of the sound as it goes faster, and the grains
-    // come at a pace their pitch does not change: notes of any pitch play
-    // theirs at the same instants. A grain still reads no further than the
-    // region: past it, it ends sooner, or with Wrap at end goes around it
-    // once at most.
+    // Every grain lasts as long whatever its pitch (Pitch, its Deviation, a
+    // note, Backwards), in either Duration Mode, reading as much more of the
+    // sound as it goes faster, and the grains come at a pace their pitch does
+    // not change: notes of any pitch play theirs at the same instants. A
+    // grain still reads no further than the region: past it, it ends sooner,
+    // or with Wrap at end goes around it once at most.
     struct : halp::toggle<"Keep time">
     {
       halp_meta(
@@ -472,9 +484,9 @@ public:
         return *this;
       }
     } scan_folder;
-    // The part of the sound that plays: Position, Duration and their
-    // Deviations are fractions of it, Scan goes through it, Loop wraps in
-    // it, and no grain reads outside of it
+    // The part of the sound that plays: Position and its Deviation, and in
+    // Region mode Duration and its Deviation, are fractions of it, Scan goes
+    // through it, Loop wraps in it, and no grain reads outside of it
     struct : halp::hslider_f32<"Sample Start", halp::range{0., 1., 0.}>
     {
       halp_meta(
@@ -523,6 +535,43 @@ public:
           "The MIDI note that plays the last part of the region and picks the last file "
           "of the folder.")
     } high_note;
+    // What Duration is: Region, a part of the region (Duration); Time, a
+    // time (Duration Time). Each mode plays its own control: switching
+    // writes neither.
+    struct
+    {
+      halp_meta(
+          description,
+          "Whether grains last a part of the region (Duration) or a time, in seconds or "
+          "in notes at the tempo (Duration Time).")
+      halp__enum_combobox("Duration Mode", Region, Region, Time)
+    } dur_mode;
+    // Time mode: the length of sound a grain reads at speed 1, which is how
+    // long it lasts then, and with Keep time at any speed. Seconds, or a
+    // note value, which the host gives in seconds at the tempo of each tick:
+    // the grains made after a change of tempo follow it, the one playing
+    // keeps its length. 30 s holds four whole notes down to 32 BPM.
+    struct : halp::time_chooser<"Duration Time", halp::range{min_grain_seconds, 30., 0.1}>
+    {
+      halp_meta(
+          description,
+          "How long each grain is in Time mode: seconds, or a note value that follows "
+          "the tempo.")
+    } dur_time;
+    // Grains start on this grid only: the grains Continuous, Trigger and the
+    // notes of MIDI In make wait for its next point, one at a point, and a
+    // chord's from the same point on. Continuous then counts its pace in
+    // points of the grid: Density sets how many there are between two
+    // grains, the nearest whole number, one at least, so that a grain every
+    // eighth note is one every eighth even as the tempo moves. None: grains
+    // start when they are due, at any sample.
+    struct : halp::grid_chooser<"Quantize", quantize_setup>
+    {
+      halp_meta(
+          description,
+          "Starts grains only on this grid: a time, a note value at the tempo or bars; "
+          "None starts them whenever they are due.")
+    } quantize;
 
   } inputs;
 
@@ -561,6 +610,7 @@ public:
     uint8_t count;
     bool scanning;           // whether Scan moves Position, to:
     uint16_t scan;           // where it has moved it in the region
+    float tempo;             // of the tick, for the note values the panel shows
     uint8_t amp[max_heads];  // window amplitude
     uint16_t pos[max_heads]; // position in the current sound
   };
@@ -591,6 +641,7 @@ public:
   uint64_t ui_sent_generation{};
   int ui_frame_counter{0}; // throttles the playheads
   bool ui_heads_shown{false};
+  float ui_sent_tempo{};
 
   // Where Scan has moved Position, as a part of the sound
   double scan_phase{};
@@ -600,8 +651,21 @@ public:
   //! (Wrap at end), else the last place where a whole grain fits
   double scan_last() const noexcept
   {
-    return inputs.loopmode ? 1. : std::clamp(1. - (double)inputs.dur, 1e-3, 1.);
+    return inputs.loopmode ? 1. : std::clamp(1. - grain_in_region(), 1e-3, 1.);
   }
+  //! Duration Mode is Time
+  bool timed() const noexcept
+  {
+    return inputs.dur_mode.value == decltype(inputs.dur_mode.value)::Time;
+  }
+  //! A grain at speed 1, as a part of the region: Duration, or Duration Time
+  //! in the shown sound, at most all of it
+  double grain_in_region() const noexcept
+  {
+    return timed() ? time_in_region : (double)inputs.dur;
+  }
+  // Duration Time as a part of the region of the shown sound, at most 1
+  double time_in_region{};
   const void* scan_source{};
   bool scan_was_playing{};
 
@@ -612,6 +676,7 @@ public:
     bool active{false};
     uint8_t velocity{0};
     double counter{0}; // samples since its last grain
+    double grid_points{0}; // with Quantize, points of the grid since then
     uint64_t pressed{}; // when, as a count of the notes pressed
   };
   // The notes with a grain to make, one bit each
@@ -655,6 +720,17 @@ public:
   // interval had: grains at the rate Density sets, not one rounded to
   // whole samples
   double trigger_counter{0};
+  // Quantize: the frames run before this tick, the frame of the last grid
+  // point; the grains due may start since that point, until they have;
+  // the grid points since the last grain of Continuous and Trigger
+  int64_t frames_run{};
+  // The tempo of the last tick
+  double tempo_now{120.};
+  int64_t grid_point_at{std::numeric_limits<int64_t>::min()};
+  bool grid_open{};
+  double grid_points{};
+  //! Quantize in its units' ranges; none for any other value
+  halp::grid_value quantize_grid() const noexcept;
   // The Density Deviation of the next grain, drawn when a grain is made
   double density_factor{1.};
   //! What Density Deviation multiplies Density by, for a normal draw \p z of
@@ -783,7 +859,8 @@ public:
   void set_voice_count(int n);
   void clear();
 
-  using tick = halp::tick;
+  // Musical: Quantize's note values and bars, the tempo the panel shows
+  using tick = halp::tick_musical;
   void operator()(tick t);
 
 private:
@@ -804,8 +881,16 @@ private:
     double interval{};
     std::array<double, 128> note_interval{};
     double gain_step{};
+    // Quantize: its grid, and its step in samples at this tick's tempo
+    halp::grid_value grid{};
+    double grid_step{};
   };
-  tick_plan make_plan(const GrainSource& cur, int cur_index, bool from_folder) noexcept;
+  tick_plan make_plan(
+      const tick& t, const GrainSource& cur, int cur_index, bool from_folder) noexcept;
+  //! The first point of the grid \p g in \p t from frame \p from on, after
+  //! the last one; none in this tick
+  std::optional<int>
+  grid_point(const tick& t, const halp::grid_value& g, int from) const noexcept;
 
   void stop_replaced_sound() noexcept;
   GrainSource current_source(bool from_folder, int& index) noexcept;
@@ -814,6 +899,12 @@ private:
 
   //! A Deviation's value for a grain: N(0, d / 4)
   float deviate(float deviation) noexcept;
+  //! The length of a grain at speed 1, with Duration Deviation, as a part of
+  //! a sound of \p frames: of the region in Region mode, Duration Time in
+  //! Time mode
+  double grain_duration(double frames, double region_len) noexcept;
+  //! Whether the grains have a length: Duration above 0, or Time mode
+  bool has_duration() const noexcept { return timed() || inputs.dur != 0.; }
   //! Whether the grains read the folder's files: Folder, with a folder set
   bool reads_folder() const noexcept;
   //! Density at sample \p s of the tick, in range
@@ -836,7 +927,7 @@ private:
   //! at \p b0: the sample after its last one in the block
   int play(Grain& g, int s0, int n, int b0, const tick_plan& p) noexcept;
   void advance_scan(const tick_plan& p) noexcept;
-  void advance_timing(const tick_plan& p, int s) noexcept;
+  void advance_timing(const tick_plan& p, int s, bool at_grid) noexcept;
 
   // Another sequence for every instance
   static std::random_device& random_source()
