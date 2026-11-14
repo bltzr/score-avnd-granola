@@ -831,7 +831,7 @@ TEST_CASE("The panel's Grain, Pitch and Output columns line up", "[app][ui]")
         if(m.panel->isAncestorOf(port))
           x[port->port().name()] = port->scenePos().x();
     const std::vector<std::vector<QString>> columns{
-        {"Continuous", "Density", "Max Voices", "Low note", "On MIDI"},
+        {"Continuous", "Density", "Max Voices", "Low note", "Quantize", "On MIDI"},
         {"Trigger", "Density Deviation", "Velocity", "High note"},
         {"Position", "Duration", "Duration Time", "Sample Start", "Loop"},
         {"Position Deviation", "Duration Deviation", "Sample End", "Duration Mode"},
@@ -1479,6 +1479,41 @@ TEST_CASE("Duration Time free: seconds, at any tempo; a plain number sent to it 
   });
 }
 
+TEST_CASE("Quantize through score: grains start on the eighth notes at 120 and 90 BPM", "[app][quantize]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    for(double tempo : {120., 90.})
+    {
+      CAPTURE(tempo);
+      QTemporaryDir dir;
+      auto* doc = score::test::new_document(ctx);
+      REQUIRE(doc);
+      auto& plug = load_execution(*doc);
+      Mounted m{*doc, plug};
+      m.tempo = tempo;
+      use_sound(m, dir, 1.);
+      // {value, unit}: an eighth note, as score's grid chooser gives it
+      m.set("Quantize", ossia::vec2f{1.f / 8.f, 1.f});
+      m.play(4);
+      CHECK(m.object().inputs.quantize.value == halp::grid_value::note(1. / 8.));
+      const int64_t from = m.at;
+      while(m.at < from + 48000 * 3)
+        m.tick();
+      const double step = 0.5 * 60. / tempo * 48000.;
+      const auto starts = m.log.starts(from);
+      REQUIRE(starts.size() >= 8);
+      for(auto s : starts)
+      {
+        CAPTURE(s);
+        // The transport started with the Mounted: quarter 0 at sample 0
+        const double k = std::round(double(s) / step);
+        CHECK(std::abs(double(s) - k * step) <= 1.);
+      }
+      all_near(intervals(starts), step, 1.);
+    }
+  });
+}
+
 TEST_CASE("A document saved before Duration had modes plays as it did", "[app][duration-mode]")
 {
   // Saved by c3f2b2e: Duration 0.2, Duration Deviation 0, Keep time on,
@@ -1518,6 +1553,7 @@ TEST_CASE("A document saved before Duration had modes plays as it did", "[app][d
       const auto mode = value("Duration Mode");
       CHECK((mode == ossia::value{std::string("Region")} || mode == ossia::value{0}));
       CHECK(value("Duration Time") == ossia::value{ossia::vec2f{0.1f, 0.f}});
+      CHECK(ossia::convert<ossia::vec2f>(value("Quantize"))[0] == 0.f);
       // The automation's cable still goes into Duration
       auto& cables = scenario_model(*doc).cables;
       REQUIRE(cables.size() == 1);

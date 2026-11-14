@@ -125,14 +125,20 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
 
     for(int step = 0; step < 200; step++)
     {
-      switch(rng() % 18)
+      switch(rng() % 19)
       {
         case 16: // Duration's mode and time, anything, synced or not
           in.dur_mode.value = decltype(in.dur_mode.value)(rng() % 3);
           in.dur_time.value = any_value(rng) * float(1 + rng() % 100);
           in.dur_time.sync = rng() % 2;
           break;
-        case 17: { // the transport
+        case 17: { // Quantize: any unit, past the ones it offers too, any value
+          in.quantize.value.unit = halp::grid_unit(int(rng() % 6) - 1);
+          in.quantize.value.value = any_value(rng) * float(1 + rng() % 40);
+          in.quantize.value.offset = any_value(rng);
+          break;
+        }
+        case 18: { // the transport
           h.tempo = std::array{120., 60., 1., 999., 0., -10., 1e9}[rng() % 7];
           if(rng() % 8 == 0)
             h.tempo = std::numeric_limits<double>::quiet_NaN();

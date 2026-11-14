@@ -1556,7 +1556,7 @@ TEST_CASE("Every port says what it does", "[ports]")
     CHECK(avnd::has_description<F>);
     outputs++;
   });
-  CHECK(inputs == 41);
+  CHECK(inputs == 42);
   CHECK(outputs == 2);
 }
 
@@ -1730,4 +1730,136 @@ TEST_CASE("Duration Mode: switching it plays the other control, and writes neith
     CHECK(in.dur.value == 0.05f);
     CHECK(in.dur_time.value == 0.02f);
   }
+}
+
+// ---------------------------------------------------------------- Quantize
+
+namespace
+{
+//! Where the points of a grid of \p quarters quarter notes fall, in samples,
+//! at \p tempo from the start
+double grid_step(double quarters, double tempo)
+{
+  return quarters * 60. / tempo * rate;
+}
+//! How far \p at is from the nearest point of a grid of \p step samples
+double off_grid(long at, double step)
+{
+  const double k = std::round(at / step);
+  return std::abs(at - k * step);
+}
+}
+
+TEST_CASE("Quantize: grains start on the grid's points, at any tempo", "[quantize][timing]")
+{
+  for(double tempo : {120., 90.})
+  {
+    CAPTURE(tempo);
+    Host h;
+    h.tempo = tempo;
+    auto& in = h.g->inputs;
+    in.quantize.value = halp::grid_value::note(1. / 8.);
+    in.density.value = 1.f; // a grain of 0.05 s: more often than the grid
+    h.run(3.);
+    const double step = grid_step(0.5, tempo);
+    REQUIRE(h.started.size() >= 8);
+    for(std::size_t k = 0; k < h.started.size(); k++)
+    {
+      CAPTURE(k, h.started[k].at);
+      CHECK(off_grid(h.started[k].at, step) <= 1.);
+      // One a point: at most as often as the grid
+      if(k > 0)
+        CHECK(h.started[k].at - h.started[k - 1].at == Catch::Approx(step).margin(1.));
+    }
+  }
+}
+
+TEST_CASE("Quantize: Density sets how many points between grains, the nearest whole number", "[quantize][timing]")
+{
+  // A grain of a sixteenth, a grid of sixteenths
+  for(auto [density, points] : std::vector<std::pair<float, int>>{
+          {1.f, 1}, {0.5f, 2}, {0.34f, 3}, {4.f, 1}, {0.26f, 4}})
+  {
+    CAPTURE(density);
+    Host h{2.};
+    h.tempo = 120.;
+    auto& in = h.g->inputs;
+    in.quantize.value = halp::grid_value::note(1. / 16.);
+    time_mode(h, 0.125f);
+    in.keep_time.value = true;
+    in.density.value = density;
+    h.run(4.);
+    const double step = grid_step(0.25, 120.);
+    REQUIRE(h.started.size() >= 6);
+    for(std::size_t k = 1; k < h.started.size(); k++)
+      CHECK(h.started[k].at - h.started[k - 1].at == Catch::Approx(points * step).margin(1.));
+  }
+}
+
+TEST_CASE("Quantize: a Trigger and the notes of a chord wait for the next point", "[quantize][midi]")
+{
+  const double step = grid_step(1., 120.); // quarters
+  {
+    Host h;
+    h.tempo = 120.;
+    h.g->inputs.quantize.value = halp::grid_value::note(1. / 4.);
+    h.continuous(false);
+    h.run(0.3); // 14400: the next quarter at 24000
+    REQUIRE(h.started.empty());
+    h.trigger();
+    h.run(0.4);
+    REQUIRE(h.started.size() == 1);
+    CHECK(h.started[0].at == Catch::Approx(step).margin(1.));
+  }
+  {
+    Host h;
+    h.tempo = 120.;
+    auto& in = h.g->inputs;
+    in.quantize.value = halp::grid_value::note(1. / 4.);
+    in.on_midi.value = on_midi::Trigger;
+    in.density.value = 0.01f; // one grain a note, here
+    h.continuous(false);
+    h.run(0.3);
+    h.press(60);
+    h.press(64);
+    h.press(67);
+    h.run(0.4);
+    REQUIRE(h.started.size() == 3);
+    std::vector<long> at;
+    for(auto& s : h.started)
+      at.push_back(s.at);
+    std::ranges::sort(at);
+    // From the point on, one a sample
+    CHECK(at[0] == Catch::Approx(step).margin(1.));
+    CHECK(at[2] - at[0] <= 2);
+  }
+}
+
+TEST_CASE("Quantize in seconds: points every that many seconds since playback started", "[quantize][timing]")
+{
+  Host h;
+  h.tempo = 140.;
+  h.g->inputs.quantize.value = halp::grid_value::seconds(0.1);
+  h.g->inputs.density.value = 1.f;
+  h.run(2.);
+  REQUIRE(h.started.size() >= 10);
+  for(std::size_t k = 0; k < h.started.size(); k++)
+  {
+    CAPTURE(k);
+    CHECK(off_grid(h.started[k].at, 0.1 * rate) <= 1.);
+    if(k > 0)
+      CHECK(h.started[k].at - h.started[k - 1].at == Catch::Approx(0.1 * rate).margin(1.));
+  }
+}
+
+TEST_CASE("Quantize to notes while the transport stands still: no grain, as there is no point", "[quantize]")
+{
+  Host h; // tempo 0 here: ticks with no musical position
+  h.g->inputs.quantize.value = halp::grid_value::note(1. / 8.);
+  h.run(1.);
+  CHECK(h.started.empty());
+  // None again: grains at once
+  h.g->inputs.quantize.value = {};
+  h.run(0.2);
+  CHECK(!h.started.empty());
 }

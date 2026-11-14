@@ -1098,6 +1098,8 @@ struct Granola::ui
         // The keys of On MIDI's slices and of By MIDI note's files, over it
         halp::item<&ins::low_note, halp::label_as("Low note")> low_note;
         halp::item<&ins::high_note, halp::label_as("High note")> high_note;
+        // The grid grains start on
+        halp::item<&ins::quantize, halp::label_as("Quantize")> quantize;
       } controls;
       // What MIDI notes do, the files they pick being Order's: under the
       // others, as wide as its longest entry
