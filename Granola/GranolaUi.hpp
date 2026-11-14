@@ -516,15 +516,15 @@ struct WaveformItem
     return x_in_region(std::clamp(shown_pos(), 0., 1.) + std::clamp(grain_part(), 0., 1.));
   }
 
-  //! The window as execution plays it, while execution gives Position, the
-  //! grain's length or mode, or the region, and it is not the one set: x0, x1
+  //! The window as execution plays it, while execution gives any of the
+  //! values, even where it is the one set: x0, x1
   std::optional<std::pair<double, double>> execution_window() const
   {
     const auto& e = execution_values;
     const auto& e_time = std::get<DUR_TIME>(e);
     const auto& e_mode = std::get<DUR_MODE>(e);
-    if(!execution(POS) && !execution(DUR) && !execution(START) && !execution(END) && !e_time
-       && !e_mode)
+    const bool any = std::apply([](const auto&... v) { return (bool(v) || ...); }, e);
+    if(!any)
       return std::nullopt;
     auto at = [&](int i) { return std::clamp(execution(i).value_or(value(i)), 0., 1.); };
     const double lo = std::min(at(START), at(END)), len = std::max(at(START), at(END)) - lo;
@@ -535,12 +535,7 @@ struct WaveformItem
                  : seconds_in_region(
                        e_time ? e_time->x : dur_time().seconds(tempo()), len);
     auto x = [&](double rel) { return x_of(lo + std::clamp(rel, 0., 1.) * len); };
-    const std::pair w{x(p), x(std::clamp(p, 0., 1.) + std::clamp(part, 0., 1.))};
-    // The same window as the one set, e.g. Duration Time's seconds for its
-    // note value at this tempo: nothing apart to show
-    if(std::abs(w.first - win_x0()) < 0.5 && std::abs(w.second - win_x1()) < 0.5)
-      return std::nullopt;
-    return w;
+    return std::pair{x(p), x(std::clamp(p, 0., 1.) + std::clamp(part, 0., 1.))};
   }
 
   void paint(auto ctx)
