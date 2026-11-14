@@ -1217,6 +1217,25 @@ TEST_CASE("Duration sent to the port while it plays: the waveform shows it apart
     const auto idx = std::distance(inl.begin(), std::ranges::find(inl, &dur_inlet));
     auto* port = m.comp->node->root_inputs()[idx]->target<ossia::value_port>();
     REQUIRE(port);
+
+    // The value set, through the cable: what execution plays is shown even
+    // where it is the window set
+    using WF = Granola::WaveformItem;
+    for(int k = 0; k < 20; k++)
+    {
+      port->write_value(0.2f, 0);
+      m.tick();
+      spin(5);
+    }
+    REQUIRE(std::get<WF::DUR>(item.execution_values));
+    CHECK(*std::get<WF::DUR>(item.execution_values) == Catch::Approx(0.2));
+    {
+      const auto same = item.execution_window();
+      REQUIRE(same);
+      CHECK(same->first == Catch::Approx(item.win_x0()).margin(1.));
+      CHECK(same->second == Catch::Approx(item.win_x1()).margin(1.));
+    }
+
     for(int k = 0; k < 20; k++)
     {
       port->write_value(0.6f, 0);
@@ -1232,7 +1251,6 @@ TEST_CASE("Duration sent to the port while it plays: the waveform shows it apart
     CHECK(ossia::convert<float>(dur_inlet.value()) == Catch::Approx(0.2f));
     CHECK(item.dur() == Catch::Approx(0.2f));
     // What execution plays, apart
-    using WF = Granola::WaveformItem;
     REQUIRE(std::get<WF::DUR>(item.execution_values));
     CHECK(*std::get<WF::DUR>(item.execution_values) == Catch::Approx(0.6));
     const auto ew = item.execution_window();
@@ -1688,7 +1706,19 @@ TEST_CASE("Duration Time or Duration Mode sent to the ports while it plays: the 
     REQUIRE(item.waveform.duration == Catch::Approx(2.).epsilon(1e-3));
     CHECK(!item.timed());
     CHECK(item.win_x1() - item.win_x0() == Catch::Approx(0.05 * item.draw_w()).margin(1.));
-    REQUIRE(!item.execution_window());
+    // Execution gives Duration Time's seconds as it plays: its window is
+    // shown, the one set
+    {
+      using WF = Granola::WaveformItem;
+      CAPTURE(
+          bool(std::get<WF::DUR>(item.execution_values)),
+          bool(std::get<WF::DUR_TIME>(item.execution_values)),
+          bool(std::get<WF::DUR_MODE>(item.execution_values)));
+      const auto same = item.execution_window();
+      REQUIRE(same);
+      CHECK(same->first == Catch::Approx(item.win_x0()).margin(1.));
+      CHECK(same->second == Catch::Approx(item.win_x1()).margin(1.));
+    }
 
     // Duration Mode through a cable: execution plays Duration Time, 0.3 s of
     // the 2 s, while the document stays in Region mode
