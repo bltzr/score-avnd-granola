@@ -1556,7 +1556,7 @@ TEST_CASE("Every port says what it does", "[ports]")
     CHECK(avnd::has_description<F>);
     outputs++;
   });
-  CHECK(inputs == 41);
+  CHECK(inputs == 43);
   CHECK(outputs == 2);
 }
 
@@ -1729,5 +1729,654 @@ TEST_CASE("Duration Mode: switching it plays the other control, and writes neith
       CHECK(s.length == Catch::Approx(m == duration_mode::Time ? 0.02 * rate : 0.05 * rate).margin(2));
     CHECK(in.dur.value == 0.05f);
     CHECK(in.dur_time.value == 0.02f);
+  }
+}
+
+// ---------------------------------------------------------------- Quantize
+
+namespace
+{
+//! Where the points of a grid of \p quarters quarter notes fall, in samples,
+//! at \p tempo from the start
+double grid_step(double quarters, double tempo)
+{
+  return quarters * 60. / tempo * rate;
+}
+//! How far \p at is from the nearest point of a grid of \p step samples
+double off_grid(long at, double step)
+{
+  const double k = std::round(at / step);
+  return std::abs(at - k * step);
+}
+}
+
+TEST_CASE("Quantize: grains start on the grid's points, at any tempo", "[quantize][timing]")
+{
+  for(auto mode : {quantize_mode::Subdivide, quantize_mode::Skip})
+  for(double tempo : {120., 90.})
+  {
+    CAPTURE(int(mode), tempo);
+    Host h;
+    h.tempo = tempo;
+    auto& in = h.g->inputs;
+    in.quantize.value = halp::grid_value::note(1. / 8.);
+    in.quantize_mode.value = mode;
+    if(mode == quantize_mode::Subdivide)
+    {
+      // A grain of 0.3 s: about an eighth at 120 and 90 BPM, one a point
+      time_mode(h, 0.3f);
+      in.keep_time.value = true;
+    }
+    // Skip: a grain of 0.05 s, more often than the grid, still one a point
+    in.density.value = 1.f;
+    h.run(3.);
+    const double step = grid_step(0.5, tempo);
+    REQUIRE(h.started.size() >= 8);
+    for(std::size_t k = 0; k < h.started.size(); k++)
+    {
+      CAPTURE(k, h.started[k].at);
+      CHECK(off_grid(h.started[k].at, step) <= 1.);
+      // One a point: at most as often as the grid
+      if(k > 0)
+        CHECK(h.started[k].at - h.started[k - 1].at == Catch::Approx(step).margin(1.));
+    }
+  }
+}
+
+TEST_CASE("Quantize: Density sets how many points between grains, the nearest whole number", "[quantize][timing]")
+{
+  // A grain of a sixteenth, a grid of sixteenths. Skip: a grain a point at
+  // most, at any Density; Subdivide: more a step past Density 1.5
+  for(auto mode : {quantize_mode::Subdivide, quantize_mode::Skip})
+  for(auto [density, points] : std::vector<std::pair<float, int>>{
+          {1.f, 1}, {0.5f, 2}, {0.34f, 3}, {0.26f, 4}, {0.7f, 1}, {4.f, 1}})
+  {
+    if(mode == quantize_mode::Subdivide && density > 1.f)
+      continue;
+    CAPTURE(int(mode), density);
+    Host h{2.};
+    h.tempo = 120.;
+    auto& in = h.g->inputs;
+    in.quantize.value = halp::grid_value::note(1. / 16.);
+    in.quantize_mode.value = mode;
+    time_mode(h, 0.125f);
+    in.keep_time.value = true;
+    in.density.value = density;
+    h.run(4.);
+    const double step = grid_step(0.25, 120.);
+    REQUIRE(h.started.size() >= 6);
+    for(std::size_t k = 1; k < h.started.size(); k++)
+      CHECK(h.started[k].at - h.started[k - 1].at == Catch::Approx(points * step).margin(1.));
+  }
+}
+
+TEST_CASE("Quantize: a Trigger and the notes of a chord wait for the next point", "[quantize][midi]")
+{
+  const double step = grid_step(1., 120.); // quarters
+  {
+    Host h;
+    h.tempo = 120.;
+    h.g->inputs.quantize.value = halp::grid_value::note(1. / 4.);
+    h.g->inputs.quantize_mode.value = quantize_mode::Skip;
+    h.continuous(false);
+    h.run(0.3); // 14400: the next quarter at 24000
+    REQUIRE(h.started.empty());
+    h.trigger();
+    h.run(0.4);
+    REQUIRE(h.started.size() == 1);
+    CHECK(h.started[0].at == Catch::Approx(step).margin(1.));
+  }
+  {
+    Host h;
+    h.tempo = 120.;
+    auto& in = h.g->inputs;
+    in.quantize.value = halp::grid_value::note(1. / 4.);
+    in.quantize_mode.value = quantize_mode::Skip;
+    in.on_midi.value = on_midi::Trigger;
+    in.density.value = 0.01f; // one grain a note, here
+    h.continuous(false);
+    h.run(0.3);
+    h.press(60);
+    h.press(64);
+    h.press(67);
+    h.run(0.4);
+    REQUIRE(h.started.size() == 3);
+    std::vector<long> at;
+    for(auto& s : h.started)
+      at.push_back(s.at);
+    std::ranges::sort(at);
+    // From the point on, one a sample
+    CHECK(at[0] == Catch::Approx(step).margin(1.));
+    CHECK(at[2] - at[0] <= 2);
+  }
+}
+
+namespace
+{
+//! The grains of \p starts in each whole step of a grid of \p step samples
+//! from its point at \p from on, up to \p to: \p count of them a step, the
+//! first on the point, the others evenly between it and the next one
+void evenly_in_steps(const std::vector<long>& starts, double from, double to, double step, int count)
+{
+  int steps = 0;
+  for(double p0 = from; p0 + step <= to; p0 += step, steps++)
+  {
+    std::vector<long> in;
+    for(long at : starts)
+      if(at >= p0 - 1. && at < p0 + step - 1.)
+        in.push_back(at);
+    CAPTURE(p0, step, count);
+    REQUIRE(in.size() == (std::size_t)count);
+    for(int i = 0; i < count; i++)
+    {
+      CAPTURE(i, in[i]);
+      CHECK(double(in[i]) == Catch::Approx(p0 + step * i / count).margin(1.));
+    }
+  }
+  CHECK(steps >= 3);
+}
+std::vector<long> starts_of(const Host& h)
+{
+  std::vector<long> at;
+  for(auto& s : h.started)
+    at.push_back(s.at);
+  std::ranges::sort(at);
+  return at;
+}
+}
+
+TEST_CASE("Quantize: a Density of more grains than points plays them evenly in each step, from its point", "[quantize][timing]")
+{
+  // An eighth of 12000 samples at 120 BPM, a grain of 11520 at Density 1:
+  // Density 1, 2, 3, 4 are 1.04, 2.08, 3.1, 4.2 grains a step
+  const double step = grid_step(0.5, 120.);
+  for(int block : {64, 37, 7})
+    for(int density : {1, 2, 3, 4})
+    {
+      CAPTURE(block, density);
+      Host h{2.};
+      h.block = block;
+      h.tempo = 120.;
+      auto& in = h.g->inputs;
+      in.quantize.value = halp::grid_value::note(1. / 8.);
+      in.quantize_mode.value = quantize_mode::Subdivide;
+      time_mode(h, 0.24f);
+      in.keep_time.value = true;
+      in.density.value = float(density);
+      h.run(1.5);
+      evenly_in_steps(starts_of(h), 0., double(h.now), step, density);
+    }
+  // Not powers of two: a step of 5 at Density 5
+  {
+    Host h{2.};
+    h.tempo = 120.;
+    auto& in = h.g->inputs;
+    in.quantize.value = halp::grid_value::note(1. / 8.);
+    in.quantize_mode.value = quantize_mode::Subdivide;
+    time_mode(h, 0.24f);
+    in.keep_time.value = true;
+    in.density.value = 4.8f;
+    h.run(1.5);
+    evenly_in_steps(starts_of(h), 0., double(h.now), step, 5);
+  }
+}
+
+TEST_CASE("Quantize: a held note plays its grains evenly in each step as well", "[quantize][midi]")
+{
+  const double step = grid_step(0.5, 120.);
+  for(int block : {64, 37})
+    for(int density : {1, 2, 3, 4})
+    {
+      CAPTURE(block, density);
+      Host h{2.};
+      h.block = block;
+      h.tempo = 120.;
+      auto& in = h.g->inputs;
+      in.quantize.value = halp::grid_value::note(1. / 8.);
+      in.quantize_mode.value = quantize_mode::Subdivide;
+      in.on_midi.value = on_midi::Trigger;
+      time_mode(h, 0.24f);
+      in.keep_time.value = true;
+      in.density.value = float(density);
+      h.continuous(false);
+      h.run(0.3); // 14400: its first grain at the eighth of 24000
+      REQUIRE(h.started.empty());
+      h.press(60);
+      h.run(1.5);
+      evenly_in_steps(starts_of(h), 2. * step, double(h.now), step, density);
+    }
+}
+
+TEST_CASE("Quantize: Density changed within a step plays its count from the next point; 0 none", "[quantize][timing]")
+{
+  const double step = grid_step(0.5, 120.); // 12000
+  Host h{2.};
+  h.block = 50;
+  h.tempo = 120.;
+  auto& in = h.g->inputs;
+  in.quantize.value = halp::grid_value::note(1. / 8.);
+  in.quantize_mode.value = quantize_mode::Subdivide;
+  time_mode(h, 0.24f);
+  in.keep_time.value = true;
+  in.density.value = 2.f;
+  h.run(1.); // 48000: four steps of 2
+  // 3 from sample 30 of the tick at 48000, inside the step of 48000
+  in.density.value = 3.f;
+  in.density.values[30] = 3.f;
+  h.run(1.);
+  const auto at = starts_of(h);
+  evenly_in_steps(at, 0., 48000., step, 2);
+  evenly_in_steps(at, 60000., 96000., step, 3);
+  // The grain at the point of 48000 came before the change; the other one
+  // of that step at Density 2's place
+  CHECK(std::ranges::count_if(at, [](long a) { return a >= 47999 && a < 59999; }) == 2);
+  // Density 0 within a step: none of its other grains. The step of 96000
+  // has its grains at 96000, 100000 and 104000.
+  h.run(0.1); // to 100800
+  CHECK(h.started.size() == at.size() + 2);
+  in.density.value = 0.f;
+  in.density.values[30] = 0.f;
+  const auto before = h.started.size();
+  h.run(0.5);
+  CHECK(h.started.size() == before);
+}
+
+TEST_CASE("Quantize: the grains of a step follow the tempo", "[quantize][timing]")
+{
+  Host h{2.};
+  h.block = 37;
+  h.tempo = 120.;
+  auto& in = h.g->inputs;
+  in.quantize.value = halp::grid_value::note(1. / 8.);
+  in.quantize_mode.value = quantize_mode::Subdivide;
+  time_mode(h, 0.24f); // 11520 samples
+  in.keep_time.value = true;
+  in.density.value = 2.f;
+  h.run(1.);
+  const long change = h.now;
+  // 90 BPM: an eighth of 16000, 2.78 grains of 5760: 3 a step
+  h.tempo = 90.;
+  h.run(2.);
+  const auto at = starts_of(h);
+  std::vector<long> before, after;
+  for(long a : at)
+    (a < change ? before : after).push_back(a);
+  REQUIRE(before.size() >= 6);
+  for(std::size_t k = 1; k < before.size(); k++)
+    CHECK(before[k] - before[k - 1] == Catch::Approx(6000.).margin(1.));
+  // From the first point at 90 on
+  std::vector<long> late;
+  for(long a : after)
+    if(a >= change + 16000)
+      late.push_back(a);
+  REQUIRE(late.size() >= 9);
+  for(std::size_t k = 1; k < late.size(); k++)
+    CHECK(late[k] - late[k - 1] == Catch::Approx(16000. / 3.).margin(1.5));
+}
+
+TEST_CASE("Quantize in seconds: points every that many seconds since playback started", "[quantize][timing]")
+{
+  Host h;
+  h.tempo = 140.;
+  h.g->inputs.quantize.value = halp::grid_value::seconds(0.1);
+  h.g->inputs.quantize_mode.value = quantize_mode::Skip;
+  h.g->inputs.density.value = 0.5f; // a grain of 0.05 s every 0.1 s
+  h.run(2.);
+  REQUIRE(h.started.size() >= 10);
+  for(std::size_t k = 0; k < h.started.size(); k++)
+  {
+    CAPTURE(k);
+    CHECK(off_grid(h.started[k].at, 0.1 * rate) <= 1.);
+    if(k > 0)
+      CHECK(h.started[k].at - h.started[k - 1].at == Catch::Approx(0.1 * rate).margin(1.));
+  }
+}
+
+TEST_CASE("Quantize to notes while the transport stands still: no grain, as there is no point", "[quantize]")
+{
+  Host h; // tempo 0 here: ticks with no musical position
+  h.g->inputs.quantize.value = halp::grid_value::note(1. / 8.);
+  h.run(1.);
+  CHECK(h.started.empty());
+  // None again: grains at once
+  h.g->inputs.quantize.value = {};
+  h.run(0.2);
+  CHECK(!h.started.empty());
+}
+
+// ---------------------------------------------------------------- Quantize Mode
+
+namespace
+{
+//! What a Quantize Mode makes of a step of the grid: a grain every \p period
+//! steps, \p count of them in that step, \p spread through it from its point
+//! (else all on the point)
+struct step_pattern
+{
+  int period{1};
+  int count{1};
+  bool spread{};
+};
+
+//! The steps of a grid of \p step samples from 0 to \p to, each with the
+//! grains of \p starts in it, a sample before its point included
+std::vector<std::vector<long>> by_step(const std::vector<long>& starts, double step, double to)
+{
+  std::vector<std::vector<long>> steps;
+  for(double p0 = 0.; p0 + step <= to; p0 += step)
+  {
+    auto& in = steps.emplace_back();
+    for(long at : starts)
+      if(at >= p0 - 1. && at < p0 + step - 1.)
+        in.push_back(at);
+  }
+  return steps;
+}
+
+//! The grains of \p starts as \p pat says, on a grid of \p step samples,
+//! from the first step with a grain on. The first of a step on its point,
+//! as the grid finds it (a sample early when the transport's quarter notes
+//! round down); the others at their own sample from it
+void follows(const std::vector<long>& starts, double step, double to, step_pattern pat)
+{
+  const auto steps = by_step(starts, step, to);
+  std::size_t first = 0;
+  while(first < steps.size() && steps[first].empty())
+    first++;
+  REQUIRE(first < steps.size());
+  int checked = 0;
+  for(std::size_t j = first; j < steps.size(); j++)
+  {
+    CAPTURE(j, pat.period, pat.count, pat.spread);
+    const auto& in = steps[j];
+    if((j - first) % pat.period != 0)
+    {
+      CHECK(in.empty());
+      continue;
+    }
+    REQUIRE(in.size() == (std::size_t)pat.count);
+    const long p0 = in[0];
+    CHECK(off_grid(p0, step) <= 1.);
+    for(int i = 0; i < pat.count; i++)
+    {
+      CAPTURE(i);
+      const long want = pat.spread ? std::lround(double(p0) + step * i / pat.count) : p0;
+      CHECK(in[i] == want);
+    }
+    checked++;
+  }
+  CHECK(checked >= 3);
+}
+
+//! A Host of Continuous on a grid of eighths at 120 BPM, 12000 samples, in
+//! Quantize Mode \p mode, grains of \p seconds at \p density
+void eighths(Host& h, quantize_mode mode, float seconds, float density)
+{
+  h.tempo = 120.;
+  auto& in = h.g->inputs;
+  in.quantize.value = halp::grid_value::note(1. / 8.);
+  in.quantize_mode.value = mode;
+  time_mode(h, seconds);
+  in.keep_time.value = true;
+  in.density.value = density;
+}
+}
+
+TEST_CASE("Quantize Mode: Chord at first", "[quantize][quantize-mode]")
+{
+  G g;
+  CHECK(g.inputs.quantize_mode.value == quantize_mode::Chord);
+}
+
+TEST_CASE("Quantize Mode: what each mode plays a step, at Density 0.5, 1, 2, 3, short and long grains", "[quantize][quantize-mode][timing]")
+{
+  constexpr double step = 12000.;
+  // Grains of 3360 and 21600 samples: at Density 1 about 3.6 a step, and
+  // one every 1.8 steps
+  struct expect
+  {
+    quantize_mode mode;
+    float seconds, density;
+    step_pattern pat;
+  };
+  const std::vector<expect> cases{
+      // Skip: a grain every round(interval / step) points, one at least
+      {quantize_mode::Skip, 0.07f, 0.5f, {1, 1}},
+      {quantize_mode::Skip, 0.07f, 1.f, {1, 1}},
+      {quantize_mode::Skip, 0.07f, 2.f, {1, 1}},
+      {quantize_mode::Skip, 0.07f, 3.f, {1, 1}},
+      {quantize_mode::Skip, 0.45f, 0.5f, {4, 1}},
+      {quantize_mode::Skip, 0.45f, 1.f, {2, 1}},
+      {quantize_mode::Skip, 0.45f, 2.f, {1, 1}},
+      {quantize_mode::Skip, 0.45f, 3.f, {1, 1}},
+      // Subdivide: round(step / interval) a step, evenly; longer intervals
+      // skip points
+      {quantize_mode::Subdivide, 0.07f, 0.5f, {1, 2, true}},
+      {quantize_mode::Subdivide, 0.07f, 1.f, {1, 4, true}},
+      {quantize_mode::Subdivide, 0.07f, 2.f, {1, 7, true}},
+      {quantize_mode::Subdivide, 0.07f, 3.f, {1, 11, true}},
+      {quantize_mode::Subdivide, 0.45f, 0.5f, {4, 1}},
+      {quantize_mode::Subdivide, 0.45f, 1.f, {2, 1}},
+      {quantize_mode::Subdivide, 0.45f, 2.f, {1, 1}},
+      {quantize_mode::Subdivide, 0.45f, 3.f, {1, 2, true}},
+      // Burst: round(Density) a step evenly, whatever the grain; under 1 a
+      // grain every round(1 / Density) steps
+      {quantize_mode::Burst, 0.07f, 0.5f, {2, 1}},
+      {quantize_mode::Burst, 0.07f, 1.f, {1, 1}},
+      {quantize_mode::Burst, 0.07f, 2.f, {1, 2, true}},
+      {quantize_mode::Burst, 0.07f, 3.f, {1, 3, true}},
+      {quantize_mode::Burst, 0.45f, 0.5f, {2, 1}},
+      {quantize_mode::Burst, 0.45f, 1.f, {1, 1}},
+      {quantize_mode::Burst, 0.45f, 2.f, {1, 2, true}},
+      {quantize_mode::Burst, 0.45f, 3.f, {1, 3, true}},
+      // Chord: round(Density) on the point itself
+      {quantize_mode::Chord, 0.07f, 0.5f, {2, 1}},
+      {quantize_mode::Chord, 0.07f, 1.f, {1, 1}},
+      {quantize_mode::Chord, 0.07f, 2.f, {1, 2}},
+      {quantize_mode::Chord, 0.07f, 3.f, {1, 3}},
+      {quantize_mode::Chord, 0.45f, 0.5f, {2, 1}},
+      {quantize_mode::Chord, 0.45f, 1.f, {1, 1}},
+      {quantize_mode::Chord, 0.45f, 2.f, {1, 2}},
+      {quantize_mode::Chord, 0.45f, 3.f, {1, 3}},
+  };
+  for(int block : {64, 37, 7})
+    for(const auto& c : cases)
+    {
+      CAPTURE(block, int(c.mode), c.seconds, c.density);
+      Host h{2.};
+      h.block = block;
+      eighths(h, c.mode, c.seconds, c.density);
+      h.run(3.5);
+      follows(starts_of(h), step, double(h.now), c.pat);
+    }
+}
+
+TEST_CASE("Quantize Mode from execution: a mode out of the list is Chord", "[quantize][quantize-mode]")
+{
+  for(int m : {4, 7, -1})
+  {
+    CAPTURE(m);
+    Host h{2.};
+    eighths(h, quantize_mode(m), 0.07f, 3.f);
+    h.run(2.);
+    follows(starts_of(h), 12000., double(h.now), {1, 3});
+  }
+}
+
+TEST_CASE("Quantize Mode Chord: each grain of a chord its own position and pitch", "[quantize][quantize-mode]")
+{
+  Host h{2.};
+  h.block = 37;
+  eighths(h, quantize_mode::Chord, 0.07f, 3.f);
+  auto& in = h.g->inputs;
+  in.pos.value = 0.5f;
+  in.pos_j.value = 0.5f;
+  in.rate_j.value = 0.5f;
+  h.run(2.);
+  std::map<long, std::vector<const Started*>> chords;
+  for(auto& s : h.started)
+    chords[s.at].push_back(&s);
+  REQUIRE(chords.size() >= 6);
+  for(auto& [at, grains] : chords)
+  {
+    CAPTURE(at);
+    CHECK(off_grid(at, 12000.) <= 1.);
+    REQUIRE(grains.size() == 3);
+    // Seen a tick after they started: their speeds known
+    if(at + 12000 > h.now)
+      continue;
+    std::set<double> pos, speed;
+    for(auto* g : grains)
+    {
+      pos.insert(g->pos);
+      speed.insert(g->speed);
+    }
+    CHECK(pos.size() == 3);
+    CHECK(speed.size() == 3);
+  }
+}
+
+TEST_CASE("Quantize Mode Chord: each grain of a chord its own file of the folder, as Sound Order says", "[quantize][quantize-mode][folder]")
+{
+  for(auto o : {order::Random, order::Alphabetical})
+  {
+    CAPTURE(int(o));
+    Folder f{5, rate};
+    Host h{2.};
+    h.block = 37;
+    h.use(f, o);
+    eighths(h, quantize_mode::Chord, 0.07f, 3.f);
+    h.run(3.);
+    std::map<long, std::vector<int>> chords;
+    for(auto& s : h.started)
+      chords[s.at].push_back(s.file);
+    REQUIRE(chords.size() >= 10);
+    int mixed = 0;
+    for(auto& [at, files] : chords)
+    {
+      CAPTURE(at);
+      REQUIRE(files.size() == 3);
+      for(int file : files)
+        CHECK((file >= 0 && file < 5));
+      if(std::set(files.begin(), files.end()).size() > 1)
+        mixed++;
+    }
+    if(o == order::Alphabetical)
+    {
+      // In order, around the folder: one a grain, chords included
+      std::vector<int> all;
+      for(auto& [at, files] : chords)
+      {
+        auto sorted = files;
+        // The voices a chord took say nothing of their order: by file, the
+        // files of a chord are three in a row of the folder, around
+        std::ranges::sort(sorted);
+        all.insert(all.end(), sorted.begin(), sorted.end());
+        const std::set<int> s(files.begin(), files.end());
+        CHECK(s.size() == 3);
+      }
+      // Every file as often, give or take a chord's worth
+      std::map<int, int> count;
+      for(int file : all)
+        count[file]++;
+      REQUIRE(count.size() == 5);
+      for(auto& [file, n] : count)
+        CHECK(std::abs(n - int(all.size()) / 5) <= 1);
+      CHECK(mixed == (int)chords.size());
+    }
+    else
+      // Random: most chords mix files (all three alike once in 25)
+      CHECK(mixed >= int(chords.size()) * 3 / 4);
+  }
+}
+
+TEST_CASE("Quantize Mode Chord: past Max Voices the chord's other grains are left out, never late", "[quantize][quantize-mode][voices]")
+{
+  // Short grains: two voices, two grains a point of the four asked
+  for(int block : {64, 7})
+  {
+    CAPTURE(block);
+    Host h{2.};
+    h.block = block;
+    eighths(h, quantize_mode::Chord, 0.07f, 4.f);
+    h.voices(2);
+    h.run(2.);
+    follows(starts_of(h), 12000., double(h.now), {1, 2});
+  }
+  // Grains of a step and a half: the two voices at a point are still busy
+  // at the next one, which plays none, nor any later
+  {
+    Host h{2.};
+    h.block = 37;
+    eighths(h, quantize_mode::Chord, 0.375f, 4.f);
+    h.voices(2);
+    h.run(2.);
+    follows(starts_of(h), 12000., double(h.now), {2, 2});
+  }
+}
+
+TEST_CASE("Quantize Mode: a held note plays chords in Chord and bursts in Burst", "[quantize][quantize-mode][midi]")
+{
+  constexpr double step = 12000.;
+  for(auto mode : {quantize_mode::Chord, quantize_mode::Burst})
+    for(int block : {64, 37, 7})
+    {
+      CAPTURE(int(mode), block);
+      Host h{2.};
+      h.block = block;
+      eighths(h, mode, 0.07f, 3.f);
+      h.g->inputs.on_midi.value = on_midi::Trigger;
+      h.continuous(false);
+      h.run(0.3); // 14400: its first grains at the eighth of 24000
+      REQUIRE(h.started.empty());
+      h.press(60);
+      h.run(1.5);
+      const auto at = starts_of(h);
+      REQUIRE(!at.empty());
+      CHECK(at.front() == Catch::Approx(24000).margin(1));
+      follows(at, step, double(h.now), {1, 3, mode == quantize_mode::Burst});
+    }
+  // Two notes held, a chord of each on the same point
+  {
+    Host h{2.};
+    h.block = 37;
+    eighths(h, quantize_mode::Chord, 0.07f, 3.f);
+    h.g->inputs.on_midi.value = on_midi::TriggerPitch;
+    h.continuous(false);
+    h.run(0.3);
+    h.press(60);
+    h.press(67);
+    h.run(1.5);
+    follows(starts_of(h), step, double(h.now), {1, 6});
+  }
+}
+
+TEST_CASE("Quantize Mode Chord and Burst: Density Deviation sets the grains of each point", "[quantize][quantize-mode]")
+{
+  for(auto mode : {quantize_mode::Chord, quantize_mode::Burst})
+  {
+    CAPTURE(int(mode));
+    Host h{2.};
+    h.block = 37;
+    eighths(h, mode, 0.02f, 4.f);
+    h.g->inputs.dens_j.value = 1.f;
+    h.run(4.);
+    const auto steps = by_step(starts_of(h), 12000., double(h.now));
+    std::set<std::size_t> sizes;
+    for(std::size_t j = 0; j < steps.size(); j++)
+    {
+      CAPTURE(j);
+      const auto& in = steps[j];
+      sizes.insert(in.size());
+      // Chord: all on the point; Burst: the first on it, the others evenly
+      if(in.empty())
+        continue;
+      const long p0 = in[0];
+      CHECK(off_grid(p0, 12000.) <= 1.);
+      for(std::size_t i = 0; i < in.size(); i++)
+        CHECK(in[i] == (mode == quantize_mode::Chord ? p0 : std::lround(p0 + 12000. * i / in.size())));
+    }
+    // Two to eight mostly: more than two sizes in 16 steps
+    CHECK(sizes.size() >= 3);
   }
 }

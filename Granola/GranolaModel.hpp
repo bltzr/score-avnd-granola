@@ -6,6 +6,7 @@
 #include <halp/audio.hpp>
 #include <halp/controls.hpp>
 #include <halp/folder_combobox.hpp>
+#include <halp/grid.hpp>
 #include <halp/mappers.hpp>
 #include <halp/meta.hpp>
 #include <halp/midi.hpp>
@@ -20,6 +21,8 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
+#include <optional>
 #include <random>
 #include <vector>
 
@@ -58,6 +61,10 @@ public:
   // What Density Deviation multiplies Density by: within this many octaves
   static constexpr double max_density_octaves = 4.;
   static constexpr double max_density_factor = 16.; // 2^max_density_octaves
+
+  // Quantize: no grid at first, else the grids of score's grid chooser
+  static constexpr halp::grid_setup quantize_setup{
+      .units = halp::grid_units::musical, .init = {}, .max_bars = 16, .max_seconds = 8.};
 
   struct ins
   {
@@ -551,6 +558,65 @@ public:
           "How long each grain is in Time mode: seconds, or a note value that follows "
           "the tempo.")
     } dur_time;
+    // Grains start on this grid only: the grains Continuous, Trigger and the
+    // notes of MIDI In make wait for its next point. How many there are on
+    // each point and between two is Quantize Mode's, so that a grain every
+    // eighth note is one every eighth even as the tempo moves. None: grains
+    // start when they are due, at any sample.
+    struct : halp::grid_chooser<"Quantize", quantize_setup>
+    {
+      halp_meta(
+          description,
+          "Starts grains only on this grid: a time, a note value at the tempo or bars; "
+          "None starts them whenever they are due.")
+    } quantize;
+    // With Quantize, how many grains Continuous and each held note play on
+    // the grid, and where. Skip: one a point at most, a grain every
+    // round(interval / step) points, one at least, the interval being the
+    // grain's length over Density. Subdivide: an interval shorter than a
+    // step plays round(step / interval) grains in it, the first on its
+    // point, the others evenly up to the next one (3 are triplets); a longer
+    // one skips points as in Skip. Burst: round(Density) grains a step,
+    // evenly from its point, whatever the grains' length (a ratchet). Chord:
+    // round(Density) grains on the point itself, each with its own
+    // deviations, output and file. In Burst and Chord, a Density under 1 is
+    // a grain every round(1 / Density) steps, 0.5 every other one, and
+    // Density Deviation multiplies Density before it is rounded, at each
+    // point. Grains past Max Voices are left out, not played later. Out of
+    // the list: Chord.
+    struct
+    {
+      halp_meta(
+          description,
+          "With Quantize, how grains fall on the grid: Density grains on each point at "
+          "once (Chord), spread evenly through each step (Burst), as often as their "
+          "length and Density say (Subdivide), or one a point at most (Skip).")
+      static clang_buggy_consteval auto name() { return "Quantize Mode"; }
+      enum enum_type
+      {
+        Chord,
+        Burst,
+        Subdivide,
+        Skip
+      } value = Chord;
+      enum widget
+      {
+        combobox
+      };
+      struct range
+      {
+        std::pair<std::string_view, enum_type> values[4]{
+            {"Chord", Chord}, {"Burst", Burst}, {"Subdivide", Subdivide}, {"Skip", Skip}};
+        enum_type init = Chord;
+      };
+      operator enum_type&() noexcept { return value; }
+      operator const enum_type&() const noexcept { return value; }
+      auto& operator=(enum_type t) noexcept
+      {
+        value = t;
+        return *this;
+      }
+    } quantize_mode;
 
   } inputs;
 
@@ -648,6 +714,13 @@ public:
   const void* scan_source{};
   bool scan_was_playing{};
 
+  // Quantize, when Density asks for more than a grain a step of the grid:
+  // the grains of the step, evenly spaced from its point, and the next one
+  struct step_grains
+  {
+    int count{};
+    int next{};
+  };
   // A held note: its grains come at its own pace, as its pitch sets the
   // length of its grains
   struct MidiVoice
@@ -655,6 +728,9 @@ public:
     bool active{false};
     uint8_t velocity{0};
     double counter{0}; // samples since its last grain
+    double grid_points{0}; // with Quantize, points of the grid since then
+    step_grains in_step{}; // and the grains of the current step
+    int chord{}; // Quantize Mode Chord: the grains still to start on the point
     uint64_t pressed{}; // when, as a count of the notes pressed
   };
   // The notes with a grain to make, one bit each
@@ -698,8 +774,38 @@ public:
   // interval had: grains at the rate Density sets, not one rounded to
   // whole samples
   double trigger_counter{0};
+  // Quantize: the frames run before this tick, the frame of the last grid
+  // point; the grains due may start since that point, until they have;
+  // the grid points since the last grain of Continuous and Trigger
+  int64_t frames_run{};
   // The tempo of the last tick
   double tempo_now{120.};
+  int64_t grid_point_at{std::numeric_limits<int64_t>::min()};
+  bool grid_open{};
+  double grid_points{};
+  step_grains in_step{};
+  // Quantize Mode Chord: the grains of Continuous still to start on the point
+  int chord_left{};
+  // The frame of the grid point the grains of the current step count from
+  int64_t step_from{};
+  //! Quantize in its units' ranges; none for any other value
+  halp::grid_value quantize_grid() const noexcept;
+  using quantize_kind = std::decay_t<decltype(inputs.quantize_mode.value)>;
+  //! Quantize Mode, Chord for a value out of its list
+  quantize_kind quantize_mode() const noexcept
+  {
+    switch(const auto m = inputs.quantize_mode.value)
+    {
+      case quantize_kind::Burst:
+      case quantize_kind::Subdivide:
+      case quantize_kind::Skip:
+        return m;
+      default:
+        return quantize_kind::Chord;
+    }
+  }
+  //! Forgets the grains of the current step and the chords to come
+  void clear_steps() noexcept;
   // The Density Deviation of the next grain, drawn when a grain is made
   double density_factor{1.};
   //! What Density Deviation multiplies Density by, for a normal draw \p z of
@@ -828,7 +934,7 @@ public:
   void set_voice_count(int n);
   void clear();
 
-  // Musical: the tempo the panel shows
+  // Musical: Quantize's note values and bars, the tempo the panel shows
   using tick = halp::tick_musical;
   void operator()(tick t);
 
@@ -850,8 +956,16 @@ private:
     double interval{};
     std::array<double, 128> note_interval{};
     double gain_step{};
+    // Quantize: its grid, and its step in samples at this tick's tempo
+    halp::grid_value grid{};
+    double grid_step{};
   };
-  tick_plan make_plan(const GrainSource& cur, int cur_index, bool from_folder) noexcept;
+  tick_plan make_plan(
+      const tick& t, const GrainSource& cur, int cur_index, bool from_folder) noexcept;
+  //! The first point of the grid \p g in \p t from frame \p from on, after
+  //! the last one; none in this tick
+  std::optional<int>
+  grid_point(const tick& t, const halp::grid_value& g, int from) const noexcept;
 
   void stop_replaced_sound() noexcept;
   GrainSource current_source(bool from_folder, int& index) noexcept;
@@ -888,7 +1002,9 @@ private:
   //! at \p b0: the sample after its last one in the block
   int play(Grain& g, int s0, int n, int b0, const tick_plan& p) noexcept;
   void advance_scan(const tick_plan& p) noexcept;
-  void advance_timing(const tick_plan& p, int s) noexcept;
+  //! The clock at sample \p s of the tick; with Quantize, whether grains are
+  //! due between two points of the grid
+  bool advance_timing(const tick_plan& p, int s, bool at_grid) noexcept;
 
   // Another sequence for every instance
   static std::random_device& random_source()
