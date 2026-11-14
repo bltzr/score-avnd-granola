@@ -572,6 +572,8 @@ void Granola::read_midi() noexcept
       auto& v = midi_voices[note];
       v.active = true;
       v.counter = 0;
+      v.in_step = {};
+      v.chord = 0;
       v.velocity = uint8_t(vel);
       v.pressed = ++notes_pressed;
       midi_held = true;
@@ -614,6 +616,62 @@ double Granola::grain_duration(double frames, double region_len) noexcept
   // Deviation relative to the grain, as Density's: never 0 or negative.
   const double part = (double)inputs.dur_time.value * samplerate / frames;
   return inputs.dur_j > 0.f ? part * density_factor_of(n01(rd), inputs.dur_j) : part;
+}
+
+halp::grid_value Granola::quantize_grid() const noexcept
+{
+  auto g = inputs.quantize.value;
+  g.offset = 0.;
+  double lo{}, hi{};
+  switch(g.unit)
+  {
+    case halp::grid_unit::free:
+      lo = min_grain_seconds;
+      hi = quantize_setup.max_seconds;
+      break;
+    case halp::grid_unit::note: // 1/256 to four whole notes
+      lo = 1. / 256.;
+      hi = 4.;
+      break;
+    case halp::grid_unit::bars:
+      lo = 1. / 16.;
+      hi = quantize_setup.max_bars;
+      break;
+    default: // a unit Quantize does not offer
+      return {};
+  }
+  if(!ossia::safe_isfinite(g.value) || !(g.value > 0.))
+    return {};
+  g.value = std::clamp(g.value, lo, hi);
+  return g;
+}
+
+std::optional<int>
+Granola::grid_point(const tick& t, const halp::grid_value& g, int from) const noexcept
+{
+  // The rest of the tick from `from` on, as a tick of its own: its musical
+  // span starts as far into the tick's as `from` is
+  const double q0 = t.start_position_in_quarters, q1 = t.end_position_in_quarters;
+  if(!ossia::safe_isfinite(q0) || !ossia::safe_isfinite(q1)
+     || !ossia::safe_isfinite(t.last_signature_change)
+     || !ossia::safe_isfinite(t.bar_at_start) || !ossia::safe_isfinite(t.bar_at_end))
+    return std::nullopt;
+  while(from < t.frames)
+  {
+    tick rest = t;
+    rest.frames = t.frames - from;
+    rest.position_in_frames = t.position_in_frames + from;
+    rest.start_position_in_quarters = q0 + (q1 - q0) * double(from) / double(t.frames);
+    const auto p = halp::next_grid_point(g, rest, samplerate);
+    if(!p)
+      return std::nullopt;
+    const int at = from + *p;
+    // A point on the edge of two ticks may be found in both: once
+    if(frames_run + at > grid_point_at + 1)
+      return at;
+    from = at + 1;
+  }
+  return std::nullopt;
 }
 
 double Granola::density_factor_of(float z, float d) noexcept
@@ -741,8 +799,8 @@ double Granola::min_duration(double rate, double frames) const noexcept
   return std::max(min_grain_seconds * samplerate * std::abs(rate), 2.) / frames;
 }
 
-Granola::tick_plan Granola::make_plan(const GrainSource& cur, int cur_index, bool from_folder)
-    noexcept
+Granola::tick_plan Granola::make_plan(
+    const tick& t, const GrainSource& cur, int cur_index, bool from_folder) noexcept
 {
   tick_plan p;
   p.cur = cur;
@@ -834,6 +892,27 @@ Granola::tick_plan Granola::make_plan(const GrainSource& cur, int cur_index, boo
         p.note_interval[n] = interval_at(pitch_for(n));
 
   p.gain_step = 1. - std::exp(-1. / (0.005 * samplerate));
+
+  // Quantize: the length of a step of its grid, in samples, at this tempo
+  p.grid = quantize_grid();
+  if(!p.grid.none())
+  {
+    const double beat = 60. / tempo_now * samplerate;
+    const bool sig = t.signature.num > 0 && t.signature.denom > 0;
+    const double quarters_in_bar = sig ? 4. * t.signature.num / t.signature.denom : 4.;
+    switch(p.grid.unit)
+    {
+      case halp::grid_unit::note:
+        p.grid_step = 4. * p.grid.value * beat;
+        break;
+      case halp::grid_unit::bars:
+        p.grid_step = p.grid.value * quarters_in_bar * beat;
+        break;
+      default:
+        p.grid_step = p.grid.value * samplerate;
+        break;
+    }
+  }
   return p;
 }
 
@@ -915,8 +994,16 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
   if(midi_active)
   {
     // The pitch of the note, from the current Pitch, so that glissandi take
-    // effect at once
-    midi_pending.reset(note);
+    // effect at once. A chord's note stays due for its other grains.
+    auto& v = midi_voices[note];
+    if(v.chord > 1)
+      v.chord--;
+    else
+    {
+      v.chord = 0;
+      midi_pending.reset(note);
+    }
+    v.grid_points = 0.;
     gp.rate = grain_rate(pitch_for(note));
     gp.amp *= velocity_gain(midi_voices[note].velocity);
   }
@@ -928,7 +1015,14 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
       if(const int n = clock_note(); n >= 0)
         gp.amp *= velocity_gain(midi_held ? midi_voices[n].velocity : latched_velocity);
     gp.rate = grain_rate(pitch_for(-1));
-    trigger = false;
+    if(chord_left > 1)
+      chord_left--;
+    else
+    {
+      chord_left = 0;
+      trigger = false;
+    }
+    grid_points = 0.;
   }
 
   // In the region, in fractions of it; not shorter than the shortest grain
@@ -974,7 +1068,8 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
   if(!g.m_active)
     return false;
   grains_made++;
-  // Density Deviation: drawn for each grain, applied to the current Density
+  // Density Deviation: drawn for each grain, applied to the current Density;
+  // in a chord each grain draws one, and the last one counts at the next point
   density_factor = inputs.dens_j > 0.f ? density_factor_of(n01(rd), inputs.dens_j) : 1.;
   spread_grain(g, p.out_channels);
   return true;
@@ -1001,7 +1096,7 @@ void Granola::advance_scan(const tick_plan& p) noexcept
   scan_travel += p.scan_step;
 }
 
-void Granola::advance_timing(const tick_plan& p, int s) noexcept
+bool Granola::advance_timing(const tick_plan& p, int s, bool at_grid) noexcept
 {
   // When an interval has passed, keeping the fraction of a sample past it
   // Density 0: none, the counters going on, so that grains come at once
@@ -1022,6 +1117,121 @@ void Granola::advance_timing(const tick_plan& p, int s) noexcept
   const double density = density_at(s) * factor;
   // 0 for Density 0: no interval passes
   const auto every = [density](double interval) { return density > 0. ? interval / density : 0.; };
+  if(!p.grid.none())
+  {
+    const double step = p.grid_step;
+    const int64_t now = frames_run + s;
+    if(at_grid)
+      step_from = now;
+    const auto mode = quantize_mode();
+    // The grains of a step two samples apart at least, as the points are
+    const double most_in_step = std::max(1., std::floor(step / 2.));
+    // At a point: whether a grain is due on it. in: the grains of the step,
+    // evenly from the point, the first on it (Subdivide, Burst); chord: the
+    // grains on the point itself (Chord). Density 0: the points go on, so
+    // that a grain comes at the next one once it is above 0.
+    const auto at_point
+        = [&](double& points, step_grains& in, int& chord, double interval) {
+      points += 1.;
+      in = {};
+      chord = 0;
+      if(!(step > 0.))
+        return false;
+      switch(mode)
+      {
+        case quantize_kind::Skip:
+          // The interval in steps of the grid, the nearest whole number
+          return interval > 0. && points >= std::max(1., std::round(interval / step));
+        case quantize_kind::Subdivide:
+          if(!(interval > 0.))
+            return false;
+          if(interval < step)
+          {
+            in.count = (int)std::min(std::round(step / interval), most_in_step);
+            in.next = 1;
+            return true;
+          }
+          return points >= std::round(interval / step);
+        case quantize_kind::Burst:
+        case quantize_kind::Chord:
+        default: {
+          // Density alone, with its Deviation: round(Density) grains on
+          // the point, under 1 one every round(1 / Density) points, from
+          // the last point that had them whether they could start or not
+          if(!(density > 0.))
+            return false;
+          int n = 1;
+          if(density < 1.)
+          {
+            if(points < std::round(1. / density))
+              return false;
+          }
+          else
+            n = (int)std::min(std::round(density), double(max_voices));
+          points = 0.;
+          if(mode == quantize_kind::Burst)
+          {
+            in.count = (int)std::min(double(n), most_in_step);
+            in.next = 1;
+          }
+          else
+            chord = n;
+          return true;
+        }
+      }
+    };
+    // Between points: the step's next grain once its time came. A step
+    // shorter than when its grains were counted (a faster tempo, another
+    // grid) leaves out those whose time passed: one late grain, not a burst.
+    // Density 0: the step's other grains are left out.
+    const bool by_density = mode != quantize_kind::Skip && mode != quantize_kind::Subdivide;
+    const auto between = [&](step_grains& in, double interval) {
+      if(in.next >= in.count)
+        return false;
+      if(!(by_density ? density > 0. : interval > 0.))
+      {
+        in = {};
+        return false;
+      }
+      const auto time_of = [&](int i) { return std::round(double(step_from) + step * i / in.count); };
+      if(double(now) < time_of(in.next))
+        return false;
+      while(in.next + 1 < in.count && double(now) >= time_of(in.next + 1))
+        in.next++;
+      in.next++;
+      return true;
+    };
+    const auto due = [&](double& points, step_grains& in, int& chord, double interval) {
+      return at_grid ? at_point(points, in, chord, interval) : between(in, interval);
+    };
+    bool within_step = false;
+    if(midi_active)
+    {
+      in_step = {};
+      chord_left = 0;
+      for(int note = 0; note < 128; note++)
+        if(auto& v = midi_voices[note]; v.active)
+          if(due(v.grid_points, v.in_step, v.chord, every(p.note_interval[note])))
+          {
+            midi_pending.set(note);
+            within_step = !at_grid;
+          }
+    }
+    else if(inputs.playing)
+    {
+      if(due(grid_points, in_step, chord_left, every(p.interval)))
+      {
+        trigger = true;
+        within_step = !at_grid;
+      }
+    }
+    else
+    {
+      in_step = {};
+      chord_left = 0;
+    }
+    return within_step;
+  }
   if(midi_active)
   {
     for(int note = 0; note < 128; note++)
@@ -1033,6 +1243,18 @@ void Granola::advance_timing(const tick_plan& p, int s) noexcept
   {
     if(passed(trigger_counter, every(p.interval)))
       trigger = true;
+  }
+  return false;
+}
+
+void Granola::clear_steps() noexcept
+{
+  in_step = {};
+  chord_left = 0;
+  for(auto& v : midi_voices)
+  {
+    v.in_step = {};
+    v.chord = 0;
   }
 }
 
@@ -1065,13 +1287,27 @@ void Granola::operator()(tick t)
       std::fill_n(outputs.audio.samples[j], t.frames, 0.);
     // Density as its values of the tick leave it, for the next tick
     density_at(std::numeric_limits<int>::max());
+    frames_run += t.frames;
     return;
   }
 
   read_midi();
   if(inputs.trig)
     trigger = true;
-  auto plan = make_plan(cur, cur_index, from_folder);
+  auto plan = make_plan(t, cur, cur_index, from_folder);
+  // Quantize: the tick's first point of the grid
+  const bool quantized = !plan.grid.none();
+  std::optional<int> next_point;
+  if(quantized)
+    next_point = grid_point(t, plan.grid, 0);
+  else
+  {
+    // Quantize again later: the grains of a step from its next point
+    grid_open = false;
+    clear_steps();
+  }
+  // Chord: every grain due on a point starts at its sample
+  const bool chords = quantized && quantize_mode() == quantize_kind::Chord;
 
   // In blocks the buffers made in prepare() hold
   for(int b0 = 0; b0 < t.frames; b0 += max_block)
@@ -1097,26 +1333,62 @@ void Granola::operator()(tick t)
       free_from[i] = grains[i].m_active ? play(grains[i], 0, n, b0, plan) : 0;
 
     // Then sample by sample: Scan, the clock, and the grains that start, one
-    // a sample at most, in a voice free at that sample. The clock first: a
-    // grain is due at the sample its interval ends, or Density's value comes
+    // a sample at most but for a chord, in a voice free at that sample. The
+    // clock first: a grain is due at the sample its interval ends, or
+    // Density's value comes
     for(int s = 0; s < n; s++)
     {
+      bool at_grid = false;
+      if(next_point && *next_point == b0 + s)
+      {
+        at_grid = grid_open = true;
+        grid_point_at = frames_run + b0 + s;
+        // Two samples on: a point is never so close to the last one
+        next_point = grid_point(t, plan.grid, b0 + s + 2);
+      }
       if(inputs.playing || midi_active)
         advance_scan(plan);
-      advance_timing(plan, b0 + s);
+      // Quantize: a grain of a step between two points opens it as a point
+      if(advance_timing(plan, b0 + s, at_grid))
+        grid_open = true;
 
-      const bool wanted = midi_active ? midi_pending.any() : trigger;
-      if(wanted && has_duration() && inputs.rate != 0.)
-        for(long k = 0; k < plan.voices; k++)
+      const auto wanted = [this] { return midi_active ? midi_pending.any() : trigger; };
+      bool voice_free = false;
+      if(wanted() && (!quantized || grid_open) && has_duration() && inputs.rate != 0.)
+      {
+        // A chord: as many as are due, each in a voice of its own; spawn()
+        // counts them down, whether they could start or not
+        bool more = true;
+        while(more)
         {
-          const long i = (next_voice + k) % plan.voices;
-          if(grains[i].m_active || free_from[i] > s)
-            continue;
-          next_voice = i + 1;
-          if(spawn(grains[i], plan))
-            free_from[i] = play(grains[i], s, n, b0, plan);
-          break;
+          voice_free = false;
+          for(long k = 0; k < plan.voices; k++)
+          {
+            const long i = (next_voice + k) % plan.voices;
+            if(grains[i].m_active || free_from[i] > s)
+              continue;
+            voice_free = true;
+            next_voice = i + 1;
+            if(spawn(grains[i], plan))
+              free_from[i] = play(grains[i], s, n, b0, plan);
+            break;
+          }
+          more = chords && voice_free && wanted();
         }
+      }
+      if(chords && grid_open)
+      {
+        // Chord: what could not start on the point, past Max Voices, is
+        // left out rather than played late
+        grid_open = false;
+        trigger = false;
+        midi_pending.clear();
+        clear_steps();
+      }
+      // Quantize: the point's grains made, or none could start: the others
+      // wait for the next point
+      else if(grid_open && (!voice_free || !wanted()))
+        grid_open = false;
     }
 
     // The part every output shares, and the gain, once for every sample
@@ -1134,5 +1406,6 @@ void Granola::operator()(tick t)
   outputs.active_grains.value
       = (int)std::ranges::count_if(grains, [](const Grain& g) { return g.m_active; });
   send_playheads(t.frames, cur);
+  frames_run += t.frames;
 }
 }
