@@ -1467,6 +1467,242 @@ TEST_CASE("Spread: in every output alike, between two neighbours at the same pow
   }
 }
 
+namespace
+{
+//! The output a grain is at, the louder of its pair; -1 for none
+int output_of(const Granola::Grain::Pan& p)
+{
+  if(p.a < 0)
+    return -1;
+  return p.at_a >= p.at_b ? p.a : p.a + 1;
+}
+//! A Host of short grains at \p mode, \p spread over \p outs outputs
+void place_grains(Host& h, channel_mode mode, float spread, int outs)
+{
+  h.g->inputs.channel_mode.value = mode;
+  h.g->inputs.spread.value = spread;
+  h.g->inputs.out_channels.value = outs;
+  h.g->inputs.dur.value = 0.005f;
+  // As many outputs from the first grain on, as score has them once the
+  // Sound file asked for them
+  h.set_outputs(h.g->output_channels(h.g->inputs.sound.channels()));
+}
+}
+
+TEST_CASE("Channel Mode: a new Granola places grains at random, as before it had modes", "[output][channel-mode][defaults]")
+{
+  const G fresh;
+  CHECK(fresh.inputs.channel_mode.value == channel_mode::Random);
+  // Not in turn: the outputs of the grains in a row are not 0, 1, 2, 3...
+  Host h{1., 1, 1.f};
+  place_grains(h, fresh.inputs.channel_mode.value, 2.f, 4);
+  h.run(3.);
+  REQUIRE(h.started.size() > 100);
+  int in_turn = 0;
+  for(std::size_t k = 1; k < h.started.size(); k++)
+    in_turn += output_of(h.started[k].pan) == (output_of(h.started[k - 1].pan) + 1) % 4;
+  CHECK(in_turn < int(h.started.size()) / 2);
+}
+
+TEST_CASE("Channel Mode Circular: grain n in output n mod Output Channels, at any Spread", "[output][channel-mode]")
+{
+  for(float spread : {1.f, 1.5f, 2.f})
+  {
+    CAPTURE(spread);
+    Host h{1., 1, 1.f};
+    place_grains(h, channel_mode::Circular, spread, 4);
+    h.run(3.);
+    REQUIRE(h.started.size() > 100);
+    for(std::size_t k = 0; k < h.started.size(); k++)
+    {
+      CAPTURE(k);
+      const auto& p = h.started[k].pan;
+      CHECK(output_of(p) == int(k % 4));
+      // In that output alone
+      CHECK(p.all == 0.f);
+      CHECK(std::max(p.at_a, p.at_b) == 1.f);
+      CHECK(std::min(p.at_a, p.at_b) == 0.f);
+    }
+    // What came out: each grain in its output only
+    int heard = 0;
+    for(std::size_t k = 0; k < h.started.size(); k++)
+    {
+      const long mid = h.started[k].at + 100 - h.rec_from;
+      if(mid >= (long)h.rec[0].size())
+        continue;
+      heard++;
+      for(int c = 0; c < 4; c++)
+        CHECK(h.rec[c][mid] == Catch::Approx(c == int(k % 4) ? 1. : 0.).margin(1e-6));
+    }
+    CHECK(heard > 100);
+  }
+}
+
+TEST_CASE("Channel Mode Circular: Spread below 1 shares a grain between every output and its own", "[output][channel-mode]")
+{
+  Host h{1., 1, 1.f};
+  place_grains(h, channel_mode::Circular, 0.5f, 3);
+  h.run(1.);
+  REQUIRE(h.started.size() > 30);
+  for(std::size_t k = 0; k < h.started.size(); k++)
+  {
+    CAPTURE(k);
+    const auto& p = h.started[k].pan;
+    CHECK(p.all == Catch::Approx(0.5f));
+    CHECK(output_of(p) == int(k % 3));
+    CHECK(std::max(p.at_a, p.at_b) == Catch::Approx(0.5f));
+  }
+  // Spread 0: in every output alike; the turn goes on meanwhile, so the
+  // grains after it are where they would have been
+  h.g->inputs.spread.value = 0.f;
+  const std::size_t from = h.started.size();
+  h.run(1.);
+  for(std::size_t k = from; k < h.started.size(); k++)
+  {
+    CHECK(h.started[k].pan.all == 1.f);
+    CHECK(h.started[k].pan.a == -1);
+  }
+  h.g->inputs.spread.value = 2.f;
+  const std::size_t back = h.started.size();
+  h.run(1.);
+  REQUIRE(h.started.size() > back + 10);
+  for(std::size_t k = back; k < h.started.size(); k++)
+  {
+    CAPTURE(k);
+    CHECK(output_of(h.started[k].pan) == int(k % 3));
+  }
+}
+
+TEST_CASE("Channel Mode Circular: Output Channels changed while it plays", "[output][channel-mode]")
+{
+  Host h{1., 1, 1.f};
+  place_grains(h, channel_mode::Circular, 2.f, 4);
+  h.run(1.);
+  REQUIRE(h.started.size() > 20);
+  const int last = output_of(h.started.back().pan);
+  // Fewer: on in turn among them, from the first again past the last
+  h.g->inputs.out_channels.value = 3;
+  std::size_t from = h.started.size();
+  h.run(1.);
+  REQUIRE(h.started.size() > from + 20);
+  CHECK(output_of(h.started[from].pan) == (last + 1 < 3 ? last + 1 : 0));
+  for(std::size_t k = from + 1; k < h.started.size(); k++)
+  {
+    CAPTURE(k);
+    const int o = output_of(h.started[k].pan);
+    CHECK(o == (output_of(h.started[k - 1].pan) + 1) % 3);
+  }
+  // More: on from where it was, over all of them
+  h.g->inputs.out_channels.value = 6;
+  from = h.started.size();
+  h.run(1.);
+  REQUIRE(h.started.size() > from + 20);
+  std::set<int> seen;
+  for(std::size_t k = from + 2; k < h.started.size(); k++)
+  {
+    const int o = output_of(h.started[k].pan);
+    seen.insert(o);
+    CHECK(o == (output_of(h.started[k - 1].pan) + 1) % 6);
+  }
+  CHECK(seen == std::set{0, 1, 2, 3, 4, 5});
+  REQUIRE((int)h.g->outputs.audio.channels == 6);
+}
+
+TEST_CASE("Channel Mode Per file: a grain in the output of its file's index, around again past the last", "[output][channel-mode][folder]")
+{
+  for(int outs : {3, 5, 8})
+  {
+    CAPTURE(outs);
+    Host h{1., 1, 1.f};
+    Folder f{5};
+    h.use(f, order::Random);
+    place_grains(h, channel_mode::PerFile, 2.f, outs);
+    h.run(2.);
+    REQUIRE(h.started.size() > 50);
+    std::set<int> files;
+    for(auto& s : h.started)
+    {
+      CAPTURE(s.file);
+      REQUIRE(s.file >= 0);
+      files.insert(s.file);
+      CHECK(output_of(s.pan) == s.file % outs);
+      CHECK(s.pan.all == 0.f);
+    }
+    CHECK(files.size() == 5);
+  }
+  // Spread 1: in its file's output alone too; 0.5: half there, half in all
+  for(float spread : {1.f, 0.5f})
+  {
+    CAPTURE(spread);
+    Host h{1., 1, 1.f};
+    Folder f{4};
+    h.use(f, order::Alphabetical);
+    place_grains(h, channel_mode::PerFile, spread, 4);
+    h.run(1.);
+    REQUIRE(h.started.size() > 20);
+    for(auto& s : h.started)
+    {
+      CHECK(output_of(s.pan) == s.file);
+      CHECK(s.pan.all == Catch::Approx(1.f - std::min(spread, 1.f)));
+    }
+  }
+}
+
+TEST_CASE("Channel Mode Per file: one file, the picked one or the Sound file, in one output", "[output][channel-mode][folder]")
+{
+  {
+    // The Sound file is the first file: the first output
+    Host h{1., 2, 1.f};
+    place_grains(h, channel_mode::PerFile, 2.f, 4);
+    h.run(1.);
+    REQUIRE(h.started.size() > 20);
+    for(auto& s : h.started)
+      CHECK(output_of(s.pan) == 0);
+  }
+  {
+    // Single file: the picked file's output, another when another is picked
+    Host h{1., 1, 1.f};
+    Folder f{6};
+    h.use(f, order::Single, "4");
+    place_grains(h, channel_mode::PerFile, 2.f, 4);
+    h.run(1.);
+    REQUIRE(h.started.size() > 20);
+    for(auto& s : h.started)
+    {
+      CHECK(s.file == 4);
+      CHECK(output_of(s.pan) == 0);
+    }
+    h.g->inputs.sound_file.value = "2";
+    const std::size_t from = h.started.size();
+    h.run(1.);
+    REQUIRE(h.started.size() > from + 20);
+    for(std::size_t k = from + 1; k < h.started.size(); k++)
+    {
+      CHECK(h.started[k].file == 2);
+      CHECK(output_of(h.started[k].pan) == 2);
+    }
+  }
+}
+
+TEST_CASE("Channel Mode from execution: a mode out of the list places grains at random", "[output][channel-mode]")
+{
+  Host h{1., 1, 1.f};
+  place_grains(h, channel_mode(3), 2.f, 4);
+  h.run(2.);
+  REQUIRE(h.started.size() > 50);
+  std::set<int> outs;
+  for(auto& s : h.started)
+    outs.insert(output_of(s.pan));
+  CHECK(outs == std::set{0, 1, 2, 3});
+  // Changed while it plays: Circular from the next grain on
+  h.g->inputs.channel_mode.value = channel_mode::Circular;
+  const std::size_t from = h.started.size();
+  h.run(1.);
+  REQUIRE(h.started.size() > from + 20);
+  for(std::size_t k = from + 1; k < h.started.size(); k++)
+    CHECK(output_of(h.started[k].pan) == (output_of(h.started[k - 1].pan) + 1) % 4);
+}
+
 TEST_CASE("Outputs, Source Channels, Channel Offset: which channels of the sound reach which outputs", "[grain][output]")
 {
   struct expect
@@ -1556,7 +1792,7 @@ TEST_CASE("Every port says what it does", "[ports]")
     CHECK(avnd::has_description<F>);
     outputs++;
   });
-  CHECK(inputs == 43);
+  CHECK(inputs == 44);
   CHECK(outputs == 2);
 }
 
@@ -2203,7 +2439,7 @@ TEST_CASE("Quantize Mode from execution: a mode out of the list is Chord", "[qua
   }
 }
 
-TEST_CASE("Quantize Mode Chord: each grain of a chord its own position and pitch", "[quantize][quantize-mode]")
+TEST_CASE("Quantize Mode Chord: each grain of a chord its own position, pitch and output", "[quantize][quantize-mode]")
 {
   Host h{2.};
   h.block = 37;
@@ -2212,16 +2448,30 @@ TEST_CASE("Quantize Mode Chord: each grain of a chord its own position and pitch
   in.pos.value = 0.5f;
   in.pos_j.value = 0.5f;
   in.rate_j.value = 0.5f;
+  place_grains(h, channel_mode::Circular, 2.f, 5);
   h.run(2.);
   std::map<long, std::vector<const Started*>> chords;
   for(auto& s : h.started)
     chords[s.at].push_back(&s);
   REQUIRE(chords.size() >= 6);
+  // Circular: the outputs in turn, a chord on three of them, the next chord
+  // from the output after its last
+  int turn = -1;
   for(auto& [at, grains] : chords)
   {
     CAPTURE(at);
     CHECK(off_grid(at, 12000.) <= 1.);
     REQUIRE(grains.size() == 3);
+    std::set<int> outs;
+    for(auto* g : grains)
+      outs.insert(output_of(g->pan));
+    if(turn < 0)
+      for(int t = 0; t < 5; t++)
+        if(outs == std::set{t, (t + 1) % 5, (t + 2) % 5})
+          turn = t;
+    REQUIRE(turn >= 0);
+    CHECK(outs == std::set{turn, (turn + 1) % 5, (turn + 2) % 5});
+    turn = (turn + 3) % 5;
     // Seen a tick after they started: their speeds known
     if(at + 12000 > h.now)
       continue;

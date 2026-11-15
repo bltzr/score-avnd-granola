@@ -379,6 +379,7 @@ struct Mounted
       int64_t start{};
       int64_t played{-1}; // -1 while it plays
       int64_t within{};   // the frames of the tick it ended in
+      Granola::Grain::Pan pan{}; // where it is among the outputs
       //! Whether it lasted \p samples
       bool lasted(double samples) const noexcept
       {
@@ -409,7 +410,7 @@ struct Mounted
           if(of_voice[i] >= 0 && grains[of_voice[i]].played < 0)
             grains[of_voice[i]].played = unknown;
           of_voice[i] = (long)grains.size();
-          grains.push_back({now - c, -1, 0});
+          grains.push_back({now - c, -1, 0, gr.m_pan});
         }
         else if(!gr.m_active && of_voice[i] >= 0 && grains[of_voice[i]].played < 0)
         {
@@ -838,8 +839,8 @@ TEST_CASE("The panel's Grain, Pitch and Output columns line up", "[app][ui]")
         {"Scan", "Scan Mode", "Scan in folder"},
         {"Pitch", "Pitch Deviation in Semitones", "Interpolation mode"},
         {"Pitch Deviation", "Reverse Chance"},
-        {"Gain", "Spread", "Source Channels"},
-        {"Gain Deviation", "Output Channels", "Channel Offset"}};
+        {"Gain", "Spread", "Output Channels", "Source Channels"},
+        {"Gain Deviation", "Channel Mode", "Channel Offset"}};
     for(const auto& column : columns)
     {
       CAPTURE(column.front().toStdString());
@@ -1572,6 +1573,79 @@ TEST_CASE("Quantize through score: grains start on the eighth notes at 120 and 9
   });
 }
 
+TEST_CASE("Channel Mode from the panel and through a cable: grains in turn, or by file", "[app][output][channel-mode]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QTemporaryDir dir;
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    use_sound(m, dir, 1.);
+    // A grain at a time, one a tick at most: the log has them in order
+    m.set("Duration", 0.05f);
+    m.set("Density", 1.f);
+    m.set("Output Channels", 4);
+    m.set("Spread", 2.f);
+    const auto output_of = [](const Granola::Grain::Pan& p) {
+      return p.a < 0 ? -1 : p.at_a >= p.at_b ? p.a : p.a + 1;
+    };
+    // The grains since \p from, each in the output after the one before
+    const auto in_turn = [&](int64_t from, int outs) {
+      std::vector<int> o;
+      for(auto& g : m.log.grains)
+        if(g.start >= from)
+          o.push_back(output_of(g.pan));
+      REQUIRE(o.size() >= 12);
+      for(std::size_t k = 1; k < o.size(); k++)
+      {
+        CAPTURE(k);
+        CHECK(o[k] == (o[k - 1] + 1) % outs);
+      }
+    };
+    m.set("Channel Mode", std::string("Circular"));
+    m.play(5);
+    CHECK(m.object().inputs.channel_mode.value
+          == decltype(m.object().inputs.channel_mode.value)::Circular);
+    int64_t from = m.at;
+    while(m.at < from + 48000 * 2)
+      m.tick();
+    in_turn(from, 4);
+
+    // Through a cable: the index of the mode, as execution gives it, while
+    // the document stays at Random
+    m.set("Channel Mode", std::string("Random"));
+    m.play(5);
+    auto* port = node_port(m, "Channel Mode");
+    REQUIRE(port);
+    from = m.at;
+    while(m.at < from + 48000 * 2)
+    {
+      port->write_value(1, 0);
+      m.tick();
+    }
+    CHECK(m.object().inputs.channel_mode.value
+          == decltype(m.object().inputs.channel_mode.value)::Circular);
+    in_turn(from + 4800, 4);
+
+    // Per file with the Sound file: the first output
+    from = m.at;
+    while(m.at < from + 48000)
+    {
+      port->write_value(2, 0);
+      m.tick();
+    }
+    int grains = 0;
+    for(auto& g : m.log.grains)
+      if(g.start >= from + 4800)
+      {
+        grains++;
+        CHECK(output_of(g.pan) == 0);
+      }
+    CHECK(grains > 5);
+  });
+}
+
 TEST_CASE("A document saved before Duration had modes plays as it did", "[app][duration-mode]")
 {
   // Saved by c3f2b2e: Duration 0.2, Duration Deviation 0, Keep time on,
@@ -1615,6 +1689,9 @@ TEST_CASE("A document saved before Duration had modes plays as it did", "[app][d
       // Quantize Mode at Chord: with no grid it changes nothing
       const auto qmode = value("Quantize Mode");
       CHECK((qmode == ossia::value{std::string("Chord")} || qmode == ossia::value{0}));
+      // Channel Mode at Random, which is how grains were placed then
+      const auto channels = value("Channel Mode");
+      CHECK((channels == ossia::value{std::string("Random")} || channels == ossia::value{0}));
       // The automation's cable still goes into Duration
       auto& cables = scenario_model(*doc).cables;
       REQUIRE(cables.size() == 1);
@@ -1631,6 +1708,8 @@ TEST_CASE("A document saved before Duration had modes plays as it did", "[app][d
         m.play(20);
         CHECK(m.object().inputs.dur_mode.value
               == decltype(m.object().inputs.dur_mode.value)::Region);
+        CHECK(m.object().inputs.channel_mode.value
+              == decltype(m.object().inputs.channel_mode.value)::Random);
         int64_t from = m.at;
         while(m.at < from + 48000 * 3)
           m.tick();
@@ -1673,11 +1752,14 @@ TEST_CASE("A preset saved before Duration had modes loads as it was saved", "[ap
     CHECK(in.density.value == Catch::Approx(2.f));
     CHECK(in.dur_mode.value == decltype(in.dur_mode.value)::Region);
     CHECK(in.dur_time.value == Catch::Approx(0.1f));
+    CHECK(in.channel_mode.value == decltype(in.channel_mode.value)::Random);
     // An instance in Time mode stays so: a preset sets the controls it has
     m.set("Duration Mode", std::string("Time"));
+    m.set("Channel Mode", std::string("Circular"));
     m.model->loadPreset(preset);
     m.play(5);
     CHECK(in.dur_mode.value == decltype(in.dur_mode.value)::Time);
+    CHECK(in.channel_mode.value == decltype(in.channel_mode.value)::Circular);
     CHECK(in.dur.value == Catch::Approx(0.2f));
   });
 }

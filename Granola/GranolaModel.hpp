@@ -123,9 +123,9 @@ public:
           "How much the length of each grain varies at random around its Duration, 0 "
           "for none.")
     } dur_j;
-    // Each grain somewhere among the output channels (Output Channels): 0 in
-    // all of them alike, 1 between two neighbouring ones (1-D VBAP), 2 in a
-    // single one
+    // Each grain somewhere among the output channels (Output Channels), at
+    // the place Channel Mode gives it: 0 in all of them alike, 1 between two
+    // neighbouring ones (1-D VBAP), 2 in a single one
     struct : halp::hslider_f32<"Spread", halp::range{0., 2., 1.}>
     {
       halp_meta(
@@ -499,8 +499,8 @@ public:
           description,
           "Where the part of the sound that plays ends, 1 for the end of the sound.")
     } sample_end;
-    // How many outputs, 0 as many as the channels read: Spread places the
-    // grains among them
+    // How many outputs, 0 as many as the channels read: Channel Mode and
+    // Spread place the grains among them
     struct : halp::spinbox_i32<"Output Channels", halp::range{0, max_outputs, 2}>
     {
       halp_meta(
@@ -570,6 +570,46 @@ public:
           "Starts grains only on this grid: a time, a note value at the tempo or bars; "
           "None starts them whenever they are due.")
     } quantize;
+    // Which output a grain is at, Spread saying how: Random, any place
+    // among them, each grain; Circular, the outputs in turn, the first grain
+    // in the first one, each next grain in the next one, the first again
+    // after the last; Per file, the output of the file the grain reads, its
+    // index in the folder (the first file in the first output), around again
+    // past the last output. The Sound file, or a folder with no file ready,
+    // is the first file. Spread is the same in every mode: 0 every output
+    // alike, 1 at the grain's place, 2 in one output. Circular and Per file
+    // place a grain on an output itself: from Spread 1 on, in that one alone.
+    struct
+    {
+      halp_meta(
+          description,
+          "Which output each grain is at: any at random, each in turn, or the one of "
+          "the file it reads.")
+      static clang_buggy_consteval auto name() { return "Channel Mode"; }
+      enum enum_type
+      {
+        Random,
+        Circular,
+        PerFile
+      } value = Random;
+      enum widget
+      {
+        combobox
+      };
+      struct range
+      {
+        std::pair<std::string_view, enum_type> values[3]{
+            {"Random", Random}, {"Circular", Circular}, {"Per file", PerFile}};
+        enum_type init = Random;
+      };
+      operator enum_type&() noexcept { return value; }
+      operator const enum_type&() const noexcept { return value; }
+      auto& operator=(enum_type t) noexcept
+      {
+        value = t;
+        return *this;
+      }
+    } channel_mode;
     // With Quantize, how many grains Continuous and each held note play on
     // the grid, and where. Skip: one a point at most, a grain every
     // round(interval / step) points, one at least, the interval being the
@@ -756,8 +796,11 @@ public:
   std::vector<double> scratch;
   std::vector<double> shared;
   std::vector<double> block_gain;
-  //! Where \p g is among \p places outputs, as Spread says
-  void spread_grain(Grain& g, int places) noexcept;
+  //! Where \p g is among \p places outputs, as Channel Mode and Spread say,
+  //! for a grain reading the file of index \p file of the folder
+  void spread_grain(Grain& g, int places, int file) noexcept;
+  // Channel Mode Circular: the output of the next grain
+  int channel_turn{};
   // The windows grains read, as tables: a few, as the window may change
   // while grains of the previous ones play (made in prepare())
   static constexpr int window_tables_count = 8;

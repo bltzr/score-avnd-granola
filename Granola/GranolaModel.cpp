@@ -397,8 +397,29 @@ const window_table* Granola::table_for(const window_shape& w) noexcept
   return nullptr;
 }
 
-void Granola::spread_grain(Grain& g, int places) noexcept
+void Granola::spread_grain(Grain& g, int places, int file) noexcept
 {
+  // Circular goes on in turn whatever Spread is, so that the grains keep
+  // their outputs when it comes back above 0
+  using mode = std::decay_t<decltype(inputs.channel_mode.value)>;
+  int fixed = -1;
+  if(places > 0)
+    switch(inputs.channel_mode.value)
+    {
+      case mode::Circular:
+        if(channel_turn >= places || channel_turn < 0)
+          channel_turn = 0;
+        fixed = channel_turn;
+        channel_turn = channel_turn + 1 < places ? channel_turn + 1 : 0;
+        break;
+      case mode::PerFile:
+        fixed = std::max(file, 0) % places;
+        break;
+      case mode::Random:
+      default:
+        break;
+    }
+
   auto& pan = g.m_pan;
   pan = {};
   // 0: in all of them alike; 1: between two neighbouring ones (1-D VBAP);
@@ -406,16 +427,30 @@ void Granola::spread_grain(Grain& g, int places) noexcept
   const float sp = std::clamp(inputs.spread.value, 0.f, 2.f);
   if(sp <= 0.f || places <= 1)
     return;
-  // A loudspeaker, each as likely, and a place around it
-  const float u = std::uniform_real_distribution<float>(0.f, float(places))(rd);
-  const int speaker = std::min(int(u), places - 1);
-  const float x = std::clamp(u - 0.5f, 0.f, float(places - 1));
-  const int a = std::min(int(x), places - 2);
-  const float t = x - a;
-  // Between a and a + 1 at the same power wherever it is
-  constexpr float half_pi = std::numbers::pi_v<float> / 2.f;
-  float wa = std::cos(t * half_pi);
-  float wb = std::sin(t * half_pi);
+  int speaker{}, a{};
+  float wa{}, wb{};
+  if(fixed >= 0)
+  {
+    // On the output itself: the pair it starts, or for the last one the
+    // pair it ends
+    speaker = fixed;
+    a = std::min(fixed, places - 2);
+    wa = float(a == fixed);
+    wb = float(a != fixed);
+  }
+  else
+  {
+    // A loudspeaker, each as likely, and a place around it
+    const float u = std::uniform_real_distribution<float>(0.f, float(places))(rd);
+    speaker = std::min(int(u), places - 1);
+    const float x = std::clamp(u - 0.5f, 0.f, float(places - 1));
+    a = std::min(int(x), places - 2);
+    const float t = x - a;
+    // Between a and a + 1 at the same power wherever it is
+    constexpr float half_pi = std::numbers::pi_v<float> / 2.f;
+    wa = std::cos(t * half_pi);
+    wb = std::sin(t * half_pi);
+  }
   // Past 1, towards the loudspeaker alone, which is a or a + 1
   if(const float one = sp - 1.f; one > 0.f)
   {
@@ -1071,7 +1106,9 @@ bool Granola::spawn(Grain& g, tick_plan& p) noexcept
   // Density Deviation: drawn for each grain, applied to the current Density;
   // in a chord each grain draws one, and the last one counts at the next point
   density_factor = inputs.dens_j > 0.f ? density_factor_of(n01(rd), inputs.dens_j) : 1.;
-  spread_grain(g, p.out_channels);
+  // The file it reads: the one Sound Order picked, else the one shown; the
+  // Sound file is the first
+  spread_grain(g, p.out_channels, idx >= 0 ? idx : p.cur_index);
   return true;
 }
 
