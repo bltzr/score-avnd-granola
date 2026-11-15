@@ -31,6 +31,7 @@ using scan_mode = std::decay_t<decltype(G{}.inputs.scan_mode.value)>;
 using interp = std::decay_t<decltype(G{}.inputs.interp_type.value)>;
 using window_mode = std::decay_t<decltype(G{}.inputs.window_mode.value)>;
 using duration_mode = std::decay_t<decltype(G{}.inputs.dur_mode.value)>;
+using channel_mode = std::decay_t<decltype(G{}.inputs.channel_mode.value)>;
 using quantize_mode = std::decay_t<decltype(G{}.inputs.quantize_mode.value)>;
 
 inline constexpr int rate = 48000;

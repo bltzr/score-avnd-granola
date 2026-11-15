@@ -194,6 +194,8 @@ TEST_CASE("The processor through anything a host may do", "[fuzz]")
           break;
         case 2:
           in.out_channels.value = int(rng() % 200) - 10;
+          // Any mode, past the ones it offers too
+          in.channel_mode.value = decltype(in.channel_mode.value)(rng() % 4);
           break;
         case 3:
           in.src_channels.value = int(rng() % 20) - 2;

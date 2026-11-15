@@ -1214,8 +1214,12 @@ struct Granola::ui
         halp::item<&ins::gain, small_knob_as("Gain")> gain;
         halp::item<&ins::gain_j, small_slider_as("Deviation")> jitter;
         halp::item<&ins::spread, small_knob_as("Spread")> spread;
-        // Spread places the grains among them
+        // Which output each grain is at, Spread saying how
+        halp::item<&ins::channel_mode, dropdown_as("Channel mode")> channel_mode;
+        // Channel mode and Spread place the grains among them
         halp::item<&ins::out_channels, halp::label_as("Outputs")> outputs;
+        // An empty cell: Channels and Offset in a row of their own
+        halp::spacing next_row{.width = 0, .height = 0};
         // The sound's channels the grains read, from Offset
         halp::item<&ins::src_channels, halp::label_as("Channels")> channels;
         halp::item<&ins::channel_offset, halp::label_as("Offset")> offset;
