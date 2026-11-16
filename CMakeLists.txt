@@ -99,7 +99,12 @@ if(SCORE_TESTING AND TARGET Catch2::Catch2WithMain AND NOT SCORE_FAST_DEV_BUILD)
       # Granola with Duration 0.2, Keep time on, Density 2, an automation
       # into Duration
       GRANOLA_BEFORE_MODES_DOCUMENT="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/granola-before-duration-modes.score"
-      GRANOLA_BEFORE_MODES_PRESET="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/granola-before-duration-modes.preset.json")
+      GRANOLA_BEFORE_MODES_PRESET="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/granola-before-duration-modes.preset.json"
+      # A document and a preset saved while the panel drew the Deviations as
+      # sliders (b44e82b): the Deviations of a Granola at 0.15 to 0.55, a
+      # cable into its Pitch Deviation
+      GRANOLA_DEVIATION_SLIDERS_DOCUMENT="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/granola-deviation-sliders.score"
+      GRANOLA_DEVIATION_SLIDERS_PRESET="${CMAKE_CURRENT_SOURCE_DIR}/tests/data/granola-deviation-sliders.preset.json")
     set_tests_properties(score_addon_granola_app_test PROPERTIES
       TIMEOUT 600 LABELS "integration;granola")
   endif()

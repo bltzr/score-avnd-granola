@@ -1086,7 +1086,7 @@ struct Granola::ui
         halp::item<&ins::playing> playing;
         halp::item<&ins::trig> trigger;
         halp::item<&ins::density, small_knob_as("Density")> density;
-        halp::item<&ins::dens_j, small_slider_as("Deviation")> dens_jitter;
+        halp::item<&ins::dens_j, small_knob_as("Deviation")> dens_jitter;
         halp::item<&ins::num_voices, halp::label_as("Max voices")> voices;
         // How much velocity sets the level of the notes' grains
         halp::item<&ins::velocity, small_knob_as("Velocity")> velocity;
@@ -1123,7 +1123,7 @@ struct Granola::ui
         // Each column flush left: its items line up under each other
         halp_meta(alignment, halp::alignments::left)
         halp::item<&ins::pos, small_knob_as("Position")> position;
-        halp::item<&ins::pos_j, small_slider_as("Deviation")> pos_jitter;
+        halp::item<&ins::pos_j, small_knob_as("Deviation")> pos_jitter;
         // Position moving by itself
         halp::item<&ins::scan, small_knob_as("Scan")> scan;
         // Duration Mode's control: the part of the region, or the time
@@ -1150,7 +1150,7 @@ struct Granola::ui
             halp::item<&ins::dur_time, small_slider_as("Duration")> duration;
           } time;
         } duration;
-        halp::item<&ins::dur_j, small_slider_as("Deviation")> dur_jitter;
+        halp::item<&ins::dur_j, small_knob_as("Deviation")> dur_jitter;
         halp::item<&ins::scan_mode, dropdown_as("Scan mode")> scan_mode;
         // The part of the sound grains read; also by the handles over the
         // waveform
@@ -1190,7 +1190,7 @@ struct Granola::ui
         // Each column flush left: its items line up under each other
         halp_meta(alignment, halp::alignments::left)
         halp::item<&ins::rate, small_knob_as("Pitch")> pitch;
-        halp::item<&ins::rate_j, small_slider_as("Deviation")> jitter;
+        halp::item<&ins::rate_j, small_knob_as("Deviation")> jitter;
         // Under Pitch: the deviation in whole semitones, at any pitch
         halp::item<&ins::rate_j_semitones, halp::label_as("Semitones")> semitones;
         // How many grains play backwards
@@ -1212,7 +1212,7 @@ struct Granola::ui
         // Each column flush left: its items line up under each other
         halp_meta(alignment, halp::alignments::left)
         halp::item<&ins::gain, small_knob_as("Gain")> gain;
-        halp::item<&ins::gain_j, small_slider_as("Deviation")> jitter;
+        halp::item<&ins::gain_j, small_knob_as("Deviation")> jitter;
         halp::item<&ins::spread, small_knob_as("Spread")> spread;
         // Which output each grain is at, Spread saying how
         halp::item<&ins::channel_mode, dropdown_as("Channel mode")> channel_mode;

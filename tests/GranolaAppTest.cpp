@@ -1764,6 +1764,93 @@ TEST_CASE("A preset saved before Duration had modes loads as it was saved", "[ap
   });
 }
 
+TEST_CASE("A document saved when the Deviations were sliders loads with their values and cable", "[app][deviation]")
+{
+  // Saved by b44e82b, the panel drawing the Deviations as sliders: two
+  // Granolas, the Deviations of the first at 0.15 to 0.55, a cable from the
+  // second's Active Grains into the first's Pitch Deviation
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QFile file{QStringLiteral(GRANOLA_DEVIATION_SLIDERS_DOCUMENT)};
+    REQUIRE(file.open(QIODevice::ReadOnly));
+    auto& delegates = ctx.interfaces<score::DocumentDelegateList>();
+    REQUIRE(!delegates.empty());
+    auto* loaded = ctx.docManager.loadDocument(
+        ctx, QStringLiteral("granola-deviation-sliders"), file.readAll(),
+        JSONObject::type(), *delegates.begin());
+    spin();
+    REQUIRE(loaded);
+    const std::vector<std::pair<QString, float>> values{
+        {"Position Deviation", 0.15f}, {"Duration Deviation", 0.25f},
+        {"Pitch Deviation", 0.35f},    {"Density Deviation", 0.45f},
+        {"Gain Deviation", 0.55f}};
+    // The kind of port they were saved as
+    const auto slider
+        = UuidKey<Process::Port>::fromString(QStringLiteral("af2b4fc3-aecb-4c15-a5aa-1c573a239925"));
+    for(int format = 0; format < 3; format++)
+    {
+      CAPTURE(format);
+      score::Document* doc = format == 0   ? loaded
+                             : format == 1 ? score::test::reload_via_json(ctx, *loaded)
+                                           : score::test::reload_via_bytes(ctx, *loaded);
+      REQUIRE(doc);
+      const auto found = processes_of(*doc, QString::fromUtf8(G::uuid()));
+      REQUIRE(found.size() == 2);
+      oscr::ProcessModel<G>* g{};
+      for(auto* p : found)
+        if(p->id() == Id<Process::ProcessModel>{2})
+          g = dynamic_cast<oscr::ProcessModel<G>*>(p);
+      REQUIRE(g);
+      for(auto& [name, v] : values)
+      {
+        CAPTURE(name.toStdString());
+        auto* inlet = qobject_cast<Process::ControlInlet*>(port_named(g->inlets(), name));
+        REQUIRE(inlet);
+        CHECK(inlet->concreteKey() == slider);
+        CHECK(ossia::convert<float>(inlet->value()) == v);
+      }
+      auto& cables = scenario_model(*doc).cables;
+      REQUIRE(cables.size() == 1);
+      auto& sink = cables.begin()->sink().find(doc->context());
+      CHECK(&sink == port_named(g->inlets(), "Pitch Deviation"));
+
+      // Played with them: the four the cable does not set
+      auto& plug = load_execution(*doc);
+      {
+        Mounted m{*doc, plug, g};
+        m.play(5);
+        auto& in = m.object().inputs;
+        CHECK(in.pos_j.value == Catch::Approx(0.15f));
+        CHECK(in.dur_j.value == Catch::Approx(0.25f));
+        CHECK(in.dens_j.value == Catch::Approx(0.45f));
+        CHECK(in.gain_j.value == Catch::Approx(0.55f));
+      }
+    }
+  });
+}
+
+TEST_CASE("A preset saved when the Deviations were sliders sets them", "[app][deviation]")
+{
+  score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
+    QFile file{QStringLiteral(GRANOLA_DEVIATION_SLIDERS_PRESET)};
+    REQUIRE(file.open(QIODevice::ReadOnly));
+    Process::Preset preset;
+    preset.key.key = UuidKey<Process::ProcessModel>::fromString(QString::fromUtf8(G::uuid()));
+    preset.data = file.readAll();
+    auto* doc = score::test::new_document(ctx);
+    REQUIRE(doc);
+    auto& plug = load_execution(*doc);
+    Mounted m{*doc, plug};
+    m.model->loadPreset(preset);
+    m.play(5);
+    auto& in = m.object().inputs;
+    CHECK(in.pos_j.value == Catch::Approx(0.15f));
+    CHECK(in.dur_j.value == Catch::Approx(0.25f));
+    CHECK(in.rate_j.value == Catch::Approx(0.35f));
+    CHECK(in.dens_j.value == Catch::Approx(0.45f));
+    CHECK(in.gain_j.value == Catch::Approx(0.55f));
+  });
+}
+
 TEST_CASE("Duration Time or Duration Mode sent to the ports while it plays: the waveform shows the time apart", "[app][ui][duration-mode]")
 {
   score::test::run_in_app([](const score::GUIApplicationContext& ctx) {
